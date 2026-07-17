@@ -22,6 +22,8 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Move candle | Drag anywhere else on the candle — vertical moves price, horizontal moves bars (occupied slots swap) |
 | Flip bull/bear | Double-click the candle, or "Flip direction" in the inspector |
 | Exact values | Select a candle and type into the O/H/L/C inspector fields |
+| Style anything | Select an object — the inspector gives per-candle colour; colour, weight and solid/dashed for levels, trendlines and arrows; colour and size for labels. "↺" resets a colour to the theme default |
+| Axis | Axis menu — switch the bottom axis from bar numbers to clock time (1m…1W timeframe + start time), and set price-axis decimals (auto or fixed). Saved and shared with the pattern |
 | Price level | `L` then click at a price; drag to move |
 | Trendline / Arrow | `T` / `A`, then press-drag; endpoints stay draggable |
 | Label | `X`, then click and type; double-click a label to edit it later |

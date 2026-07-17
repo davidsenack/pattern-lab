@@ -135,8 +135,115 @@ function dpFor(step) {
 }
 
 function gridStep() { return niceStep(range() / Math.max(2, H / 48)); }
-function readoutDp() { return clamp(dpFor(gridStep()) + 1, 2, 5); }
+function readoutDp() {
+	const ov = doc.axis && doc.axis.priceDp;
+	if (ov != null) return clamp(ov, 0, 6);
+	return clamp(dpFor(gridStep()) + 1, 2, 5);
+}
 const fmt = (p, dp) => p.toFixed(dp === undefined ? readoutDp() : dp);
+
+/* effective decimals for the price axis (respects manual override) */
+function axisPriceDp() {
+	const ov = doc.axis && doc.axis.priceDp;
+	return ov != null ? clamp(ov, 0, 6) : dpFor(gridStep());
+}
+
+/* ————— x-axis (bar-index vs time) ————— */
+
+const TF_PRESETS = [
+	{ v: 1, label: '1m' }, { v: 5, label: '5m' }, { v: 15, label: '15m' },
+	{ v: 30, label: '30m' }, { v: 60, label: '1h' }, { v: 240, label: '4h' },
+	{ v: 1440, label: '1D' }, { v: 10080, label: '1W' },
+];
+
+function defaultAxis() {
+	return { xMode: 'index', tf: 5, clock: '09:30', date: '2024-01-01', priceDp: null };
+}
+
+/* copy only the style fields that are actually set */
+function styleOf(v) {
+	const o = {};
+	if (v.color) o.color = v.color;
+	if (v.width != null) o.width = +v.width;
+	if (v.dash != null) o.dash = !!v.dash;
+	if (v.size != null) o.size = +v.size;
+	return o;
+}
+
+/* colors from imports/links are untrusted and land in SVG attributes —
+   accept only #rgb / #rrggbb hex */
+function cleanColor(s) {
+	return /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s || '') ? s : undefined;
+}
+
+function importStyle(v) {
+	const o = {};
+	const c = cleanColor(v && v.color);
+	if (c) o.color = c;
+	if (v && isFinite(+v.width)) o.width = clamp(+v.width, 0.5, 12);
+	if (v && typeof v.dash === 'boolean') o.dash = v.dash;
+	if (v && isFinite(+v.size)) o.size = clamp(+v.size, 6, 60);
+	return o;
+}
+
+function sanitizeAxis(a) {
+	const d = defaultAxis();
+	if (!a || typeof a !== 'object') return d;
+	if (a.xMode === 'time' || a.xMode === 'index') d.xMode = a.xMode;
+	if (TF_PRESETS.some(t => t.v === +a.tf)) d.tf = +a.tf;
+	if (typeof a.clock === 'string' && /^\d{1,2}:\d{2}$/.test(a.clock)) d.clock = a.clock;
+	if (typeof a.date === 'string' && /^\d{4}-\d{1,2}-\d{1,2}$/.test(a.date)) d.date = a.date;
+	if (a.priceDp === null) d.priceDp = null;
+	else if (isFinite(+a.priceDp) && +a.priceDp >= 0 && +a.priceDp <= 6) d.priceDp = +a.priceDp;
+	return d;
+}
+
+/* default weights, px */
+const DEF_W = { level: 1, line: 1.6, arrow: 1.8 };
+const DEF_TEXT_SIZE = 13;
+
+/* pick dark or light ink for text sitting on a solid color */
+function contrastInk(hex) {
+	const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+	if (!m) return '#0e1217';
+	const n = parseInt(m[1], 16);
+	const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+	return lum > 0.58 ? '#0e1217' : '#ffffff';
+}
+
+const pad2 = n => (n < 10 ? '0' : '') + n;
+
+function parseClock(s) {
+	const m = String(s || '').match(/^(\d{1,2}):(\d{2})/);
+	if (!m) return 570; // 09:30
+	return (+m[1]) * 60 + (+m[2]);
+}
+
+function parseDateUTC(s) {
+	const m = String(s || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+	if (!m) return Date.UTC(2024, 0, 1);
+	return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+}
+
+/* label for a bar index under the current axis config */
+function xLabel(slot) {
+	const ax = doc.axis;
+	if (!ax || ax.xMode !== 'time') return String(slot);
+	const tf = ax.tf || 5;
+	if (tf < 1440) {
+		let mins = parseClock(ax.clock) + slot * tf;
+		mins = ((mins % 1440) + 1440) % 1440;
+		return pad2(Math.floor(mins / 60)) + ':' + pad2(mins % 60);
+	}
+	const days = tf === 10080 ? slot * 7 : slot;
+	const d = new Date(parseDateUTC(ax.date) + days * 86400000);
+	return pad2(d.getUTCMonth() + 1) + '/' + pad2(d.getUTCDate());
+}
+
+/* min px between x labels — time labels are wider than bar indices */
+function xLabelGap() {
+	return (doc.axis && doc.axis.xMode === 'time') ? 62 : 52;
+}
 
 /* ————— seed ————— */
 
@@ -164,6 +271,7 @@ function normalizeDoc(d) {
 	for (const k of ['candles', 'levels', 'lines', 'arrows', 'texts']) {
 		if (!Array.isArray(d[k])) d[k] = [];
 	}
+	d.axis = Object.assign(defaultAxis(), d.axis || {});
 	return d;
 }
 
@@ -223,6 +331,7 @@ function afterHistory() {
 	hover = null;
 	save();
 	buildInspector();
+	if (typeof renderAxisPanel === 'function') renderAxisPanel();
 	requestRender();
 }
 
@@ -240,8 +349,10 @@ function findSel() {
 function hitTol() { return lastPointerType === 'touch' ? 13 : 7; }
 
 function textBox(t) {
-	const halfW = Math.max(16, t.text.length * 3.6) + 4;
-	return { cx: slotToX(t.x), cy: priceToY(t.p), halfW, halfH: 10 };
+	const size = t.size || DEF_TEXT_SIZE;
+	const label = t.text || 'Text';
+	const halfW = Math.max(16, label.length * size * 0.29) + 5;
+	return { cx: slotToX(t.x), cy: priceToY(t.p), halfW, halfH: size * 0.62 + 4 };
 }
 
 function hitTest(x, y) {
@@ -720,7 +831,7 @@ btnClear.addEventListener('click', () => {
 		clearArmed = null;
 		btnClear.classList.remove('confirm');
 		btnClear.title = 'Clear canvas';
-		mutate(() => { doc = { candles: [], levels: [], lines: [], arrows: [], texts: [] }; });
+		mutate(() => { doc = normalizeDoc({ axis: doc.axis }); });
 		sel = null; hover = null;
 		buildInspector();
 		requestRender();
@@ -1036,6 +1147,7 @@ function renderLibrary() {
 			mutate(() => { doc = remapIds(e.doc); });
 			sel = null; hover = null;
 			buildInspector();
+			renderAxisPanel();
 			fitView();
 			closeMenus();
 			flashHint(`Loaded “${e.name}” — undo restores your previous canvas`);
@@ -1095,13 +1207,14 @@ function exportCsv() {
 }
 
 function exportJson() {
-	const seg = l => ({ x1: numOut(l.x1), p1: numOut(l.p1), x2: numOut(l.x2), p2: numOut(l.p2) });
+	const seg = l => ({ x1: numOut(l.x1), p1: numOut(l.p1), x2: numOut(l.x2), p2: numOut(l.p2), ...styleOf(l) });
 	const data = {
-		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c) })),
-		levels: doc.levels.map(l => ({ price: numOut(l.price) })),
+		axis: { ...doc.axis },
+		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c), ...(c.color ? { color: c.color } : {}) })),
+		levels: doc.levels.map(l => ({ price: numOut(l.price), ...styleOf(l) })),
 		lines: doc.lines.map(seg),
 		arrows: doc.arrows.map(seg),
-		texts: doc.texts.map(t => ({ x: numOut(t.x), p: numOut(t.p), text: t.text })),
+		texts: doc.texts.map(t => ({ x: numOut(t.x), p: numOut(t.p), text: t.text, ...styleOf(t) })),
 	};
 	download('pattern.json', JSON.stringify(data, null, '\t') + '\n', 'application/json');
 	flashHint(`Exported ${data.candles.length} bars to pattern.json`);
@@ -1113,9 +1226,9 @@ const num = v => parseFloat(v);
 function parseImport(text) {
 	const t = text.trim();
 	if (!t) throw new Error('Nothing to import — paste rows or choose a file.');
-	let candles, levels = [], lines = [], arrows = [], texts = [], note = '';
+	let candles, levels = [], lines = [], arrows = [], texts = [], axis, note = '';
 	const segs = a => (Array.isArray(a) ? a : [])
-		.map(v => ({ x1: num(v.x1), p1: num(v.p1), x2: num(v.x2), p2: num(v.p2) }))
+		.map(v => ({ x1: num(v.x1), p1: num(v.p1), x2: num(v.x2), p2: num(v.p2), ...importStyle(v) }))
 		.filter(v => isFinite(v.x1) && isFinite(v.p1) && isFinite(v.x2) && isFinite(v.p2));
 
 	if (t[0] === '{' || t[0] === '[') {
@@ -1127,16 +1240,18 @@ function parseImport(text) {
 		candles = arr.map(k => ({
 			slot: Number.isFinite(k.slot) ? k.slot : undefined,
 			o: num(k.o ?? k.open), h: num(k.h ?? k.high), l: num(k.l ?? k.low), c: num(k.c ?? k.close),
+			...(cleanColor(k.color) ? { color: cleanColor(k.color) } : {}),
 		}));
 		if (!Array.isArray(data) && Array.isArray(data.levels)) {
-			levels = data.levels.map(v => ({ price: num(v.price ?? v) })).filter(v => isFinite(v.price));
+			levels = data.levels.map(v => ({ price: num(v.price ?? v), ...importStyle(v) })).filter(v => isFinite(v.price));
 		}
 		if (!Array.isArray(data)) {
 			lines = segs(data.lines);
 			arrows = segs(data.arrows);
+			if (data.axis) axis = sanitizeAxis(data.axis);
 			if (Array.isArray(data.texts)) {
 				texts = data.texts
-					.map(v => ({ x: num(v.x), p: num(v.p), text: String(v.text == null ? '' : v.text).slice(0, 60) }))
+					.map(v => ({ x: num(v.x), p: num(v.p), text: String(v.text == null ? '' : v.text).slice(0, 60), ...importStyle(v) }))
 					.filter(v => isFinite(v.x) && isFinite(v.p));
 			}
 		}
@@ -1175,22 +1290,24 @@ function parseImport(text) {
 		k.h = Math.max(k.h, k.o, k.c);
 		k.l = Math.min(k.l, k.o, k.c);
 	}
-	return { candles, levels, lines, arrows, texts, note };
+	return { candles, levels, lines, arrows, texts, axis, note };
 }
 
 function doImport(text) {
 	const r = parseImport(text);
 	mutate(() => {
-		doc = {
-			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c })),
-			levels: r.levels.map(v => ({ id: uid(), price: v.price })),
-			lines: r.lines.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2 })),
-			arrows: r.arrows.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2 })),
-			texts: r.texts.map(v => ({ id: uid(), x: v.x, p: v.p, text: v.text })),
-		};
+		doc = normalizeDoc({
+			axis: r.axis || doc.axis,
+			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c, ...(v.color ? { color: v.color } : {}) })),
+			levels: r.levels.map(v => ({ id: uid(), price: v.price, ...styleOf(v) })),
+			lines: r.lines.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
+			arrows: r.arrows.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
+			texts: r.texts.map(v => ({ id: uid(), x: v.x, p: v.p, text: v.text, ...(v.color ? { color: v.color } : {}), ...(v.size ? { size: v.size } : {}) })),
+		});
 	});
 	sel = null; hover = null;
 	buildInspector();
+	renderAxisPanel();
 	fitView();
 	return r;
 }
@@ -1308,6 +1425,61 @@ function startTextEdit(id, isNew, preSnap) {
 	});
 }
 
+/* ————— inspector: style controls ————— */
+
+const W_PRESETS = { level: [1, 1.75, 2.5, 3.5], line: [1.6, 2.4, 3.2, 4.5], arrow: [1.8, 2.6, 3.6, 4.8] };
+const SIZE_PRESETS = [13, 16, 20, 26];
+
+function effColor(type, el) {
+	if (type === 'candle') return el.color || (el.c >= el.o ? COL.up : COL.down);
+	if (type === 'level') return el.color || COL.level;
+	if (type === 'text') return el.color || COL.crossText;
+	return el.color || COL.tline;			// line, arrow
+}
+
+function isDashed(type, el) {
+	return type === 'level' ? el.dash !== false : !!el.dash;
+}
+
+function colorRow(type, el) {
+	const has = !!el.color;
+	return `<div class="insp-row"><span class="insp-lbl">Color</span>` +
+		`<span class="color-wrap"><input type="color" class="color-in" data-style="color" value="${effColor(type, el)}" aria-label="Color">` +
+		`<button class="reset-btn${has ? '' : ' hidden'}" data-reset="color" title="Reset to theme colour">↺</button></span></div>`;
+}
+
+function weightRow(type, el) {
+	const wp = W_PRESETS[type];
+	const cur = el.width != null ? el.width : wp[0];
+	const btns = wp.map(v =>
+		`<button class="seg-btn${Math.abs(v - cur) < 0.01 ? ' active' : ''}" data-style="width" data-val="${v}" title="${v}px" aria-label="Weight ${v}px">` +
+		`<span class="wbar" style="height:${v}px"></span></button>`).join('');
+	return `<div class="insp-row"><span class="insp-lbl">Weight</span><div class="seg">${btns}</div></div>`;
+}
+
+function dashRow(type, el) {
+	const on = isDashed(type, el);
+	return `<div class="insp-row"><span class="insp-lbl">Style</span><div class="seg">` +
+		`<button class="seg-btn${on ? '' : ' active'}" data-style="dash" data-val="0" aria-label="Solid line"><span class="dashbar solid"></span></button>` +
+		`<button class="seg-btn${on ? ' active' : ''}" data-style="dash" data-val="1" aria-label="Dashed line"><span class="dashbar dashed"></span></button>` +
+		`</div></div>`;
+}
+
+function sizeRow(el) {
+	const cur = el.size || DEF_TEXT_SIZE;
+	const btns = SIZE_PRESETS.map((v, i) =>
+		`<button class="seg-btn${Math.abs(v - cur) < 0.01 ? ' active' : ''}" data-style="size" data-val="${v}" aria-label="Size ${v}">` +
+		`<span style="font-size:${9 + i * 2.5}px;line-height:1">A</span></button>`).join('');
+	return `<div class="insp-row"><span class="insp-lbl">Size</span><div class="seg">${btns}</div></div>`;
+}
+
+function styleSection(type, el) {
+	let rows = colorRow(type, el);
+	if (type === 'text') rows += sizeRow(el);
+	else if (type === 'level' || type === 'line' || type === 'arrow') rows += weightRow(type, el) + dashRow(type, el);
+	return `<div class="insp-style">${rows}</div>`;
+}
+
 /* ————— inspector ————— */
 
 function buildInspector() {
@@ -1324,7 +1496,7 @@ function buildInspector() {
 		const up = el.c >= el.o;
 		html = `
 			<div class="insp-head">
-				<span class="insp-dot" style="background:${up ? COL.up : COL.down}"></span>
+				<span class="insp-dot" style="background:${effColor('candle', el)}"></span>
 				<span class="insp-title">Candle · bar ${el.slot}</span>
 				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
 			</div>
@@ -1333,6 +1505,7 @@ function buildInspector() {
 					<div class="field"><label>${k.toUpperCase()}</label>
 					<input type="number" step="0.25" data-k="${k}" value="${fmt(el[k])}"></div>`).join('')}
 			</div>
+			${styleSection('candle', el)}
 			<div class="insp-actions">
 				<button data-act="flip">Flip direction</button>
 			</div>`;
@@ -1346,14 +1519,16 @@ function buildInspector() {
 			<div class="insp-grid single">
 				<div class="field"><label>@</label>
 				<input type="number" step="0.25" data-k="price" value="${fmt(el.price)}"></div>
-			</div>`;
+			</div>
+			${styleSection('level', el)}`;
 	} else if (sel.type === 'text') {
 		html = `
 			<div class="insp-head">
-				<span class="insp-dot" style="background:${COL.crossText}"></span>
+				<span class="insp-dot" style="background:${effColor('text', el)}"></span>
 				<span class="insp-title">Label</span>
 				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
 			</div>
+			${styleSection('text', el)}
 			<div class="insp-actions">
 				<button data-act="edit">Edit text…</button>
 			</div>`;
@@ -1369,12 +1544,13 @@ function buildInspector() {
 				<input type="number" step="0.25" data-k="p1" value="${fmt(el.p1)}"></div>
 				<div class="field"><label>${sel.type === 'arrow' ? 'To' : 'P2'}</label>
 				<input type="number" step="0.25" data-k="p2" value="${fmt(el.p2)}"></div>
-			</div>`;
+			</div>
+			${styleSection(sel.type, el)}`;
 	}
 	inspectorEl.innerHTML = html;
 	inspectorEl.hidden = false;
 
-	inspectorEl.querySelectorAll('input').forEach(inp => {
+	inspectorEl.querySelectorAll('input[data-k]').forEach(inp => {
 		inp.addEventListener('focus', () => { inspectorEditing = true; inp.dataset.pre = snap(); inp.select(); });
 		inp.addEventListener('input', () => {
 			const el2 = findSel();
@@ -1397,6 +1573,54 @@ function buildInspector() {
 		});
 		inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') inp.blur(); });
 	});
+
+	/* live color picker: apply on input, commit one undo step on change */
+	const colorIn = inspectorEl.querySelector('input[data-style="color"]');
+	if (colorIn) {
+		colorIn.addEventListener('input', () => {
+			const el2 = findSel();
+			if (!el2) return;
+			if (!colorIn.dataset.pre) colorIn.dataset.pre = snap();
+			el2.color = colorIn.value;
+			const dot = inspectorEl.querySelector('.insp-dot');
+			if (dot) dot.style.background = colorIn.value;
+			const reset = inspectorEl.querySelector('[data-reset="color"]');
+			if (reset) reset.classList.remove('hidden');
+			requestRender();
+		});
+		colorIn.addEventListener('change', () => {
+			if (colorIn.dataset.pre && snap() !== colorIn.dataset.pre) pushUndo(colorIn.dataset.pre);
+			delete colorIn.dataset.pre;
+		});
+	}
+
+	/* segmented style buttons: weight, dash, size */
+	inspectorEl.querySelectorAll('.seg-btn[data-style]').forEach(btn => {
+		btn.addEventListener('click', () => {
+			const el2 = findSel();
+			if (!el2) return;
+			const key = btn.dataset.style, raw = btn.dataset.val;
+			const pre = snap();
+			if (key === 'width') el2.width = +raw;
+			else if (key === 'size') el2.size = +raw;
+			else if (key === 'dash') el2.dash = raw === '1';
+			if (snap() !== pre) pushUndo(pre);
+			buildInspector();
+			requestRender();
+		});
+	});
+
+	const resetColor = inspectorEl.querySelector('[data-reset="color"]');
+	if (resetColor) resetColor.addEventListener('click', () => {
+		const el2 = findSel();
+		if (!el2 || !el2.color) return;
+		const pre = snap();
+		delete el2.color;
+		pushUndo(pre);
+		buildInspector();
+		requestRender();
+	});
+
 	inspectorEl.querySelectorAll('[data-act]').forEach(btn => {
 		btn.addEventListener('click', () => {
 			const el2 = findSel();
@@ -1412,11 +1636,11 @@ function buildInspector() {
 function syncInspectorValues() {
 	const el = findSel();
 	if (!el || inspectorEl.hidden) return;
-	inspectorEl.querySelectorAll('input').forEach(inp => {
+	inspectorEl.querySelectorAll('input[data-k]').forEach(inp => {
 		if (document.activeElement !== inp) inp.value = fmt(el[inp.dataset.k]);
 	});
 	const dot = inspectorEl.querySelector('.insp-dot');
-	if (dot && sel.type === 'candle') dot.style.background = el.c >= el.o ? COL.up : COL.down;
+	if (dot && sel.type === 'candle') dot.style.background = effColor('candle', el);
 	const title = inspectorEl.querySelector('.insp-title');
 	if (title && sel.type === 'candle') title.textContent = `Candle · bar ${el.slot}`;
 }
@@ -1466,7 +1690,7 @@ function render() {
 
 function buildScene(ui) {
 	const parts = [];
-	const dp = dpFor(gridStep());
+	const dp = axisPriceDp();
 
 	/* grid — horizontal price lines */
 	const step = gridStep();
@@ -1477,15 +1701,17 @@ function buildScene(ui) {
 		parts.push(`<text x="${W + 8}" y="${(y + 3.5).toFixed(1)}" fill="${COL.axisText}" font-family="ui-monospace,Menlo,monospace" font-size="10.5">${p.toFixed(dp)}</text>`);
 	}
 
-	/* grid — vertical slot lines + bar index labels */
+	/* grid — vertical slot lines + x-axis labels (bar index or time) */
 	let n = 1;
-	while (n * view.slotW < 52) n *= n < 5 ? 5 : 2;
+	const gap = xLabelGap();
+	while (n * view.slotW < gap) n *= n < 5 ? 5 : 2;
 	const s0 = Math.ceil(view.xOff / n) * n;
+	const xEdge = W - (doc.axis && doc.axis.xMode === 'time' ? 20 : 12);
 	for (let s = s0; slotToX(s) <= W; s += n) {
 		const x = slotToX(s);
 		if (x < 0) continue;
 		parts.push(`<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="${COL.grid}"/>`);
-		if (x <= W - 12) parts.push(`<text x="${x.toFixed(1)}" y="${H + 15}" fill="${COL.axisText}" font-family="ui-monospace,Menlo,monospace" font-size="10" text-anchor="middle">${s}</text>`);
+		if (x <= xEdge) parts.push(`<text x="${x.toFixed(1)}" y="${H + 15}" fill="${COL.axisText}" font-family="ui-monospace,Menlo,monospace" font-size="10" text-anchor="middle">${xLabel(s)}</text>`);
 	}
 
 	/* levels (behind candles) */
@@ -1494,11 +1720,14 @@ function buildScene(ui) {
 		if (y < -10 || y > H + 10) continue;
 		const isSel = sel && sel.id === lv.id;
 		const isHov = hover && hover.id === lv.id;
-		const w = isSel || isHov ? 1.6 : 1;
-		const op = isSel ? 1 : 0.75;
-		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="${COL.level}" stroke-width="${w}" stroke-dasharray="7 5" opacity="${op}"/>`);
+		const col = lv.color || COL.level;
+		const base = lv.width != null ? lv.width : DEF_W.level;
+		const w = (isSel || isHov ? 0.6 : 0) + base;
+		const op = isSel ? 1 : 0.78;
+		const dash = lv.dash === false ? '' : ' stroke-dasharray="7 5"';
+		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="${col}" stroke-width="${w}"${dash} opacity="${op}"/>`);
 		if (ui) {
-			parts.push(tag(W, y, fmt(lv.price), COL.level, '#0e1217'));
+			parts.push(tag(W, y, fmt(lv.price), col, contrastInk(col)));
 			if (isSel) parts.push(`<circle cx="${W / 2}" cy="${y.toFixed(1)}" r="4" fill="${COL.bg}" stroke="${COL.accent}" stroke-width="1.5"/>`);
 		}
 	}
@@ -1509,10 +1738,13 @@ function buildScene(ui) {
 		const x2 = slotToX(ln.x2), y2 = priceToY(ln.p2);
 		const isSel = sel && sel.id === ln.id;
 		const isHov = hover && hover.id === ln.id;
-		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${COL.tline}" stroke-width="${isSel || isHov ? 2 : 1.5}" opacity="${isSel ? 1 : 0.85}"/>`);
+		const col = ln.color || COL.tline;
+		const w = (ln.width != null ? ln.width : DEF_W.line) + (isSel || isHov ? 0.5 : 0);
+		const dash = ln.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
+		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.9}"/>`);
 		if (ui && (isSel || isHov)) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
-				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : COL.tline}" stroke-width="1.5"/>`);
+				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
 		}
 	}
@@ -1523,19 +1755,21 @@ function buildScene(ui) {
 		const x2 = slotToX(ar.x2), y2 = priceToY(ar.p2);
 		const isSel = sel && sel.id === ar.id;
 		const isHov = hover && hover.id === ar.id;
-		const w = isSel || isHov ? 2.2 : 1.8;
+		const col = ar.color || COL.tline;
+		const w = (ar.width != null ? ar.width : DEF_W.arrow) + (isSel || isHov ? 0.4 : 0);
 		const ang = Math.atan2(y2 - y1, x2 - x1);
-		const hl = 10 + w * 1.5;			// arrowhead length
+		const hl = 8 + w * 2.2;				// arrowhead length scales with weight
 		const ha = 0.42;					// half-angle
 		const bx = x2 - Math.cos(ang) * hl * 0.82;	// line stops short of the tip
 		const by = y2 - Math.sin(ang) * hl * 0.82;
 		const p1x = x2 - Math.cos(ang - ha) * hl, p1y = y2 - Math.sin(ang - ha) * hl;
 		const p2x = x2 - Math.cos(ang + ha) * hl, p2y = y2 - Math.sin(ang + ha) * hl;
-		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${COL.tline}" stroke-width="${w}" stroke-linecap="round" opacity="${isSel ? 1 : 0.9}"/>`);
-		parts.push(`<path d="M${x2.toFixed(1)} ${y2.toFixed(1)} L${p1x.toFixed(1)} ${p1y.toFixed(1)} L${p2x.toFixed(1)} ${p2y.toFixed(1)} Z" fill="${COL.tline}" opacity="${isSel ? 1 : 0.9}"/>`);
+		const dash = ar.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
+		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.92}"/>`);
+		parts.push(`<path d="M${x2.toFixed(1)} ${y2.toFixed(1)} L${p1x.toFixed(1)} ${p1y.toFixed(1)} L${p2x.toFixed(1)} ${p2y.toFixed(1)} Z" fill="${col}" opacity="${isSel ? 1 : 0.92}"/>`);
 		if (ui && (isSel || isHov)) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
-				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : COL.tline}" stroke-width="1.5"/>`);
+				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
 		}
 	}
@@ -1546,7 +1780,7 @@ function buildScene(ui) {
 		const cx = slotToX(c.slot);
 		if (cx < -bw || cx > W + bw) continue;
 		const up = c.c >= c.o;
-		const col = up ? COL.up : COL.down;
+		const col = c.color || (up ? COL.up : COL.down);
 		const yH = priceToY(c.h), yL = priceToY(c.l);
 		const bt = priceToY(Math.max(c.o, c.c));
 		let bb = priceToY(Math.min(c.o, c.c));
@@ -1583,13 +1817,14 @@ function buildScene(ui) {
 		const cx = slotToX(t.x), cy = priceToY(t.p);
 		const isSel = sel && sel.id === t.id;
 		const isHov = hover && hover.id === t.id;
+		const size = t.size || DEF_TEXT_SIZE;
 		const label = t.text || 'Text';
-		const em = !t.text ? COL.axisText : COL.crossText;
+		const col = t.text ? (t.color || COL.crossText) : COL.axisText;
 		if (ui && (isSel || isHov)) {
 			const b = textBox(t);
 			parts.push(`<rect x="${(cx - b.halfW).toFixed(1)}" y="${(cy - b.halfH).toFixed(1)}" width="${(b.halfW * 2).toFixed(1)}" height="${(b.halfH * 2).toFixed(1)}" rx="4" fill="${COL.chrome}" stroke="${isSel ? COL.accent : COL.hairline}" stroke-width="${isSel ? 1.4 : 1}"/>`);
 		}
-		parts.push(`<text x="${cx.toFixed(1)}" y="${(cy + 3.6).toFixed(1)}" fill="${em}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="500" text-anchor="middle" font-style="${t.text ? 'normal' : 'italic'}">${escHtml(label)}</text>`);
+		parts.push(`<text x="${cx.toFixed(1)}" y="${(cy + size * 0.34).toFixed(1)}" fill="${col}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="${size}" font-weight="500" text-anchor="middle" font-style="${t.text ? 'normal' : 'italic'}">${escHtml(label)}</text>`);
 	}
 
 	/* palette drop ghost */
@@ -1615,12 +1850,14 @@ function buildScene(ui) {
 		const s = Math.round(xToSlotF(cursor.x));
 		const cx = slotToX(s);
 		if (cx >= 0 && cx <= W) {
-			parts.push(`<line x1="${cx.toFixed(1)}" y1="0" x2="${cx.toFixed(1)}" y2="${H}" stroke="rgba(255,255,255,0.13)" stroke-dasharray="3 4"/>`);
-			parts.push(`<rect x="${(cx - 14).toFixed(1)}" y="${H + 3}" width="28" height="16" rx="4" fill="${COL.hairline}"/>`);
-			parts.push(`<text x="${cx.toFixed(1)}" y="${H + 14.5}" fill="${COL.crossText}" font-family="ui-monospace,Menlo,monospace" font-size="10" text-anchor="middle">${s}</text>`);
+			const lab = xLabel(s);
+			const halfW = Math.max(14, lab.length * 3.4 + 6);
+			parts.push(`<line x1="${cx.toFixed(1)}" y1="0" x2="${cx.toFixed(1)}" y2="${H}" stroke="${COL.crossLine}" stroke-dasharray="3 4"/>`);
+			parts.push(`<rect x="${(cx - halfW).toFixed(1)}" y="${H + 3}" width="${(halfW * 2).toFixed(1)}" height="16" rx="4" fill="${COL.hairline}"/>`);
+			parts.push(`<text x="${cx.toFixed(1)}" y="${H + 14.5}" fill="${COL.crossText}" font-family="ui-monospace,Menlo,monospace" font-size="10" text-anchor="middle">${lab}</text>`);
 		}
 		const y = cursor.y;
-		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.13)" stroke-dasharray="3 4"/>`);
+		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="${COL.crossLine}" stroke-dasharray="3 4"/>`);
 		parts.push(tag(W, y, fmt(yToPrice(y)), COL.hairline, COL.crossText));
 	}
 
@@ -1682,6 +1919,71 @@ for (const [key, t] of Object.entries(THEMES)) {
 }
 applyTheme(savedTheme());
 
+/* ————— axis panel ————— */
+
+const axisPanel = document.getElementById('panelAxis');
+wireMenuToggle(document.getElementById('btnAxis'), axisPanel);
+
+function setAxis(patch) {
+	const pre = snap();
+	doc.axis = Object.assign({}, doc.axis, patch);
+	if (snap() !== pre) pushUndo(pre); else save();
+	renderAxisPanel();
+	requestRender();
+}
+
+function renderAxisPanel() {
+	const ax = doc.axis || defaultAxis();
+	const isTime = ax.xMode === 'time';
+	const daily = ax.tf >= 1440;
+	const tfOpts = TF_PRESETS.map(t => `<option value="${t.v}"${t.v === ax.tf ? ' selected' : ''}>${t.label}</option>`).join('');
+	const dpOpts = ['Auto', 0, 1, 2, 3, 4, 5].map(v => {
+		const val = v === 'Auto' ? '' : v;
+		const on = (v === 'Auto' && ax.priceDp == null) || v === ax.priceDp;
+		return `<option value="${val}"${on ? ' selected' : ''}>${v}</option>`;
+	}).join('');
+
+	axisPanel.innerHTML = `
+		<div class="axis-sec">
+			<span class="axis-h">Time axis</span>
+			<div class="seg full">
+				<button class="seg-btn${isTime ? '' : ' active'}" data-ax="index">Bars</button>
+				<button class="seg-btn${isTime ? ' active' : ''}" data-ax="time">Time</button>
+			</div>
+			${isTime ? `
+			<div class="axis-field"><span class="axis-lbl">Timeframe</span>
+				<select id="axTf">${tfOpts}</select></div>
+			<div class="axis-field"><span class="axis-lbl">Start</span>
+				${daily
+					? `<input id="axStart" type="text" value="${escHtml(ax.date)}" placeholder="YYYY-MM-DD" spellcheck="false">`
+					: `<input id="axStart" type="text" value="${escHtml(ax.clock)}" placeholder="HH:MM" spellcheck="false">`}
+			</div>` : ''}
+		</div>
+		<div class="axis-sec">
+			<span class="axis-h">Price axis</span>
+			<div class="axis-field"><span class="axis-lbl">Decimals</span>
+				<select id="axDp">${dpOpts}</select></div>
+		</div>`;
+
+	axisPanel.querySelectorAll('[data-ax]').forEach(b =>
+		b.addEventListener('click', () => setAxis({ xMode: b.dataset.ax })));
+
+	const tf = axisPanel.querySelector('#axTf');
+	if (tf) tf.addEventListener('change', () => setAxis({ tf: +tf.value }));
+
+	const start = axisPanel.querySelector('#axStart');
+	if (start) {
+		const commit = () => setAxis(daily ? { date: start.value.trim() } : { clock: start.value.trim() });
+		start.addEventListener('change', commit);
+		start.addEventListener('keydown', e => { if (e.key === 'Enter') { e.stopPropagation(); start.blur(); } });
+	}
+
+	const dp = axisPanel.querySelector('#axDp');
+	if (dp) dp.addEventListener('change', () => setAxis({ priceDp: dp.value === '' ? null : +dp.value }));
+}
+
+renderAxisPanel();
+
 /* ————— help overlay ————— */
 
 const helpEl = document.getElementById('help');
@@ -1697,13 +1999,15 @@ helpEl.addEventListener('pointerdown', e => { if (e.target === helpEl) toggleHel
 /* ————— share by URL ————— */
 
 function encodeDoc(d) {
-	const seg = l => [numOut(l.x1), numOut(l.p1), numOut(l.x2), numOut(l.p2)];
+	const st = el => { const s = styleOf(el); return Object.keys(s).length ? s : undefined; };
+	const seg = l => { const s = st(l); const base = [numOut(l.x1), numOut(l.p1), numOut(l.x2), numOut(l.p2)]; return s ? [...base, s] : base; };
 	const payload = {
-		c: sortedCandles().map(c => [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c)]),
-		v: d.levels.map(l => numOut(l.price)),
+		x: { ...d.axis },
+		c: sortedCandles().map(c => c.color ? [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c), { color: c.color }] : [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c)]),
+		v: d.levels.map(l => { const s = st(l); return s ? [numOut(l.price), s] : numOut(l.price); }),
 		l: d.lines.map(seg),
 		a: d.arrows.map(seg),
-		t: d.texts.map(x => [numOut(x.x), numOut(x.p), x.text]),
+		t: d.texts.map(x => { const s = st(x); const base = [numOut(x.x), numOut(x.p), x.text]; return s ? [...base, s] : base; }),
 	};
 	const json = JSON.stringify(payload);
 	return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -1713,13 +2017,16 @@ function decodeDoc(str) {
 	const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
 	const json = decodeURIComponent(escape(atob(b64)));
 	const p = JSON.parse(json);
-	const seg = a => ({ id: uid(), x1: +a[0], p1: +a[1], x2: +a[2], p2: +a[3] });
+	const seg = a => ({ id: uid(), x1: +a[0], p1: +a[1], x2: +a[2], p2: +a[3], ...importStyle(a[4]) });
 	return normalizeDoc({
-		candles: (p.c || []).map(a => ({ id: uid(), slot: +a[0], o: +a[1], h: +a[2], l: +a[3], c: +a[4] })),
-		levels: (p.v || []).map(v => ({ id: uid(), price: +v })),
+		axis: p.x ? sanitizeAxis(p.x) : undefined,
+		candles: (p.c || []).map(a => ({ id: uid(), slot: +a[0], o: +a[1], h: +a[2], l: +a[3], c: +a[4], ...importStyle(a[5]) })),
+		levels: (p.v || []).map(v => Array.isArray(v)
+			? { id: uid(), price: +v[0], ...importStyle(v[1]) }
+			: { id: uid(), price: +v }),
 		lines: (p.l || []).map(seg),
 		arrows: (p.a || []).map(seg),
-		texts: (p.t || []).map(a => ({ id: uid(), x: +a[0], p: +a[1], text: String(a[2] || '').slice(0, 60) })),
+		texts: (p.t || []).map(a => ({ id: uid(), x: +a[0], p: +a[1], text: String(a[2] || '').slice(0, 60), ...importStyle(a[3]) })),
 	});
 }
 
@@ -1816,13 +2123,14 @@ if (loadFromHash()) {
 	fitView();
 	save();
 } else if (!load()) {
-	doc = seedDoc();
+	doc = normalizeDoc(seedDoc());
 	fitView();
 	save();
 }
 measure();
 setTool('select');
 buildInspector();
+renderAxisPanel();
 requestRender();
 showFirstTip();
 
