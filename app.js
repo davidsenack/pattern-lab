@@ -99,6 +99,7 @@ let hover = null;			// hit result { type, id, part }
 let cursor = null;			// { x, y } in svg coords
 let gesture = null;
 let palDrag = null;			// { shape, x, y, over, moved } — dragging from the shape rail
+let pendingLine = null;		// { type, id, pre } — line/arrow awaiting its second click
 let editingTextId = null;	// text label currently open in the inline HTML editor
 let undoStack = [];
 let redoStack = [];
@@ -566,6 +567,18 @@ function evPos(e) {
 	return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 
+/* drop an in-progress (first-click-placed) line/arrow that never got its
+   second point */
+function cancelPendingLine() {
+	if (!pendingLine) return;
+	const { type, id } = pendingLine;
+	pendingLine = null;
+	const key = type === 'line' ? 'lines' : 'arrows';
+	doc[key] = doc[key].filter(l => l.id !== id);
+	if (sel && sel.id === id) sel = null;
+	buildInspector();
+}
+
 svg.addEventListener('pointerdown', e => {
 	svg.focus({ preventScroll: true });
 	lastPointerType = e.pointerType || 'mouse';
@@ -573,7 +586,7 @@ svg.addEventListener('pointerdown', e => {
 	const pre = snap();
 
 	if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
-		gesture = { mode: 'pan', x0: x, y0: y, v0: { ...view }, pre };
+		gesture = { mode: 'pan', x0: x, y0: y, v0: { ...view }, pre, rightClick: e.button === 2 };
 		svg.setPointerCapture(e.pointerId);
 		return;
 	}
@@ -592,11 +605,26 @@ svg.addEventListener('pointerdown', e => {
 		buildInspector();
 	} else if (tool === 'line' || tool === 'arrow') {
 		const type = tool === 'line' ? 'line' : 'arrow';
-		const ln = { id: uid(), x1: xToSlotF(x), p1: yToPrice(y), x2: xToSlotF(x), p2: yToPrice(y) };
-		poolFor(type).push(ln);
-		sel = { type, id: ln.id };
-		gesture = { mode: 'drag', hit: { type, id: ln.id, part: 'p2' }, x0: x, y0: y, orig: { ...ln }, pre, newLine: type };
-		buildInspector();
+		if (pendingLine && pendingLine.type === type) {
+			/* second click — finalize the endpoint */
+			const ln = poolFor(type).find(l => l.id === pendingLine.id);
+			if (ln) {
+				ln.x2 = xToSlotF(x); ln.p2 = yToPrice(y);
+				if (Math.hypot(slotToX(ln.x2) - slotToX(ln.x1), priceToY(ln.p2) - priceToY(ln.p1)) < 6) {
+					ln.x2 = ln.x1 + (type === 'arrow' ? 1.4 : 2);	// degenerate → default length
+				}
+				if (snap() !== pendingLine.pre) pushUndo(pendingLine.pre);
+			}
+			pendingLine = null;
+		} else {
+			/* first click — drop the start point, second point tracks the cursor */
+			cancelPendingLine();
+			const ln = { id: uid(), x1: xToSlotF(x), p1: yToPrice(y), x2: xToSlotF(x), p2: yToPrice(y) };
+			poolFor(type).push(ln);
+			sel = { type, id: ln.id };
+			pendingLine = { type, id: ln.id, pre };
+			buildInspector();
+		}
 	} else if (tool === 'text') {
 		const t = { id: uid(), x: xToSlotF(x), p: yToPrice(y), text: '' };
 		doc.texts.push(t);
@@ -630,6 +658,9 @@ svg.addEventListener('pointermove', e => {
 	cursor = p;
 	if (gesture) {
 		applyGesture(p.x, p.y);
+	} else if (pendingLine) {
+		const ln = poolFor(pendingLine.type).find(l => l.id === pendingLine.id);
+		if (ln) { ln.x2 = xToSlotF(p.x); ln.p2 = yToPrice(p.y); }
 	} else {
 		hover = (tool === 'select' && p.x <= W && p.y <= H) ? hitTest(p.x, p.y) : null;
 	}
@@ -647,15 +678,13 @@ svg.addEventListener('pointerup', e => {
 	if (!gesture) return;
 	const g = gesture;
 	gesture = null;
-	if (g.newLine) {
-		const pool = poolFor(g.newLine);
-		const ln = pool.find(l => l.id === g.hit.id);
-		const p = evPos(e);
-		if (ln && Math.hypot(p.x - g.x0, p.y - g.y0) < 6) {
-			/* a click with no drag: drop a default-length annotation instead of nothing */
-			ln.x2 = ln.x1 + (g.newLine === 'arrow' ? 1.4 : 2);
-			ln.p2 = ln.p1;
-		}
+	const p = evPos(e);
+	/* right-click without a drag → back to the pointer tool */
+	if (g.rightClick && Math.hypot(p.x - g.x0, p.y - g.y0) < 5) {
+		if (tool !== 'select') setTool('select');
+		else cancelPendingLine();
+		requestRender();
+		return;
 	}
 	if (g.mode === 'drag' && snap() !== g.pre) pushUndo(g.pre);
 	else save();
@@ -771,6 +800,7 @@ window.addEventListener('keydown', e => {
 			if (!helpEl.hidden) toggleHelp(false);
 			else if (!modalEl.hidden) closeModal();
 			else if (openMenu) closeMenus();
+			else if (pendingLine) { cancelPendingLine(); requestRender(); }
 			else if (tool !== 'select') setTool('select');
 			else { sel = null; buildInspector(); requestRender(); }
 			break;
@@ -803,12 +833,13 @@ const HINTS = {
 	select: 'Drag a candle to move it · pull the wick dots & body-edge pills to reshape · double-click adds or flips · press ? for help',
 	candle: 'Click to place a candle · Esc when done',
 	level: 'Click at a price to drop a horizontal level · Esc when done',
-	line: 'Press and drag to draw a trendline · Esc when done',
-	arrow: 'Press and drag to draw an arrow · Esc when done',
+	line: 'Click for the start, click again for the end · right-click or Esc to finish',
+	arrow: 'Click for the start, click again for the end · right-click or Esc to finish',
 	text: 'Click where you want a label, then type · Esc when done',
 };
 
 function setTool(t) {
+	if (t !== tool) cancelPendingLine();
 	tool = t;
 	toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === t));
 	hintEl.textContent = HINTS[t];

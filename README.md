@@ -25,7 +25,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Style anything | Select an object — the inspector gives per-candle colour; colour, weight and solid/dashed for levels, trendlines and arrows; colour and size for labels. "↺" resets a colour to the theme default |
 | Axis | Axis menu — switch the bottom axis from bar numbers to clock time (1m…1W timeframe + start time), and set price-axis decimals (auto or fixed). Saved and shared with the pattern |
 | Price level | `L` then click at a price; drag to move |
-| Trendline / Arrow | `T` / `A`, then press-drag; endpoints stay draggable |
+| Trendline / Arrow | `T` / `A`, then click the start point and click the end point (a live preview follows the cursor between clicks); endpoints stay draggable. Right-click or `Esc` returns to the pointer tool |
 | Label | `X`, then click and type; double-click a label to edit it later |
 | Zoom / pan | Scroll = price zoom · ⌘/ctrl-scroll = bar zoom · alt-drag or right-drag = pan · drag the axes to scale |
 | Fit / undo / delete | `F` · `⌘Z` / `⇧⌘Z` · `⌫` on selection |
