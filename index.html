@@ -118,6 +118,20 @@
 
 	<div id="inspector" class="inspector" hidden></div>
 
+	<div id="firstTip" class="first-tip" hidden>
+		<svg class="tip-mark" width="20" height="26" viewBox="0 0 20 26" aria-hidden="true">
+			<line x1="10" y1="1.5" x2="10" y2="24.5" stroke="var(--up)" stroke-width="1.6"/>
+			<rect x="5.4" y="8" width="9.2" height="10" rx="1.2" fill="var(--up)"/>
+			<circle cx="10" cy="1.8" r="2.6" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+			<circle cx="10" cy="24.2" r="2.6" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+		</svg>
+		<div class="tip-body">
+			<p class="tip-title">These candles are editable</p>
+			<p class="tip-sub">Drag a candle's wick tips or body edges to reshape it — or grab the whole thing to move it.</p>
+		</div>
+		<button id="tipDismiss" class="tip-dismiss">Got it</button>
+	</div>
+
 	<div id="empty" class="empty" hidden>
 		<div class="empty-card">
 			<p class="empty-title">Blank tape</p>

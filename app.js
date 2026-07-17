@@ -496,6 +496,7 @@ svg.addEventListener('pointerdown', e => {
 	} else {
 		const hit = hitTest(x, y);
 		if (hit) {
+			if (hit.type === 'candle') dismissTip();
 			sel = { type: hit.type, id: hit.id };
 			const el = findByHit(hit);
 			const g = { mode: 'drag', hit, x0: x, y0: y, orig: { ...el }, pre };
@@ -1767,6 +1768,37 @@ function checkSmallScreen() {
 window.addEventListener('resize', checkSmallScreen);
 checkSmallScreen();
 
+/* ————— first-visit tip ————— */
+
+const TIP_KEY = 'patternlab.tipSeen';
+const tipEl = document.getElementById('firstTip');
+let tipShowing = false;
+
+function tipSeen() {
+	try { return localStorage.getItem(TIP_KEY) === '1'; } catch (e) { return true; }
+}
+
+function showFirstTip() {
+	if (tipSeen() || tipShowing || !doc.candles.length) return;
+	tipEl.hidden = false;
+	tipShowing = true;
+}
+
+function dismissTip() {
+	if (!tipShowing) return;
+	tipShowing = false;
+	try { localStorage.setItem(TIP_KEY, '1'); } catch (e) { /* ignore */ }
+	const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+	if (reduce) { tipEl.hidden = true; return; }
+	tipEl.classList.add('leaving');
+	tipEl.addEventListener('animationend', () => {
+		tipEl.hidden = true;
+		tipEl.classList.remove('leaving');
+	}, { once: true });
+}
+
+document.getElementById('tipDismiss').addEventListener('click', dismissTip);
+
 /* ————— boot ————— */
 
 function measure() {
@@ -1792,6 +1824,7 @@ measure();
 setTool('select');
 buildInspector();
 requestRender();
+showFirstTip();
 
 /* debug/test handle */
 window.__lab = {
