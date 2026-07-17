@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+	<rect width="1200" height="630" fill="#0e1217"/>
+	<g stroke-width="0">
+		<g transform="translate(150 150)">
+			<line x1="0" y1="40" x2="0" y2="300" stroke="#2fa88c" stroke-width="5"/><rect x="-26" y="120" width="52" height="150" rx="5" fill="#2fa88c"/>
+			<line x1="90" y1="90" x2="90" y2="330" stroke="#e5484d" stroke-width="5"/><rect x="64" y="150" width="52" height="120" rx="5" fill="#e5484d"/>
+			<line x1="180" y1="10" x2="180" y2="250" stroke="#2fa88c" stroke-width="5"/><rect x="154" y="60" width="52" height="150" rx="5" fill="#2fa88c"/>
+			<line x1="270" y1="70" x2="270" y2="290" stroke="#2fa88c" stroke-width="5"/><rect x="244" y="90" width="52" height="150" rx="5" fill="#2fa88c"/>
+			<line x1="360" y1="-30" x2="360" y2="200" stroke="#2fa88c" stroke-width="5"/><rect x="334" y="0" width="52" height="150" rx="5" fill="#2fa88c"/>
+		</g>
+	</g>
+	<text x="150" y="530" fill="#dee4ec" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="72" font-weight="700">Pattern Lab</text>
+	<text x="154" y="580" fill="#8b96a5" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="30">Draw candlestick chart patterns by hand</text>
+</svg>
