@@ -786,6 +786,14 @@ kbd {
 	color: var(--ink-3);
 }
 
+.help-ver {
+	float: right;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: .04em;
+	color: var(--ink-3);
+}
+
 /* ————— small-screen notice ————— */
 .small-screen {
 	position: fixed;
