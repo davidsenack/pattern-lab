@@ -24,12 +24,12 @@ const THEMES = {
 	midnight: {
 		label: 'Midnight',
 		css: {
-			bg: '#07090d', chrome: '#0d1015', 'chrome-2': '#151922', hairline: '#1e242e',
-			ink: '#e6eaf0', 'ink-2': '#8f99a8', 'ink-3': '#57616f',
-			up: '#27ab89', down: '#f04f54', accent: '#6a9bff', 'accent-soft': 'rgba(106,155,255,.16)',
-			level: '#e0aa4e', tline: '#9a8cff', danger: '#f04f54',
+			bg: '#090d20', chrome: '#111634', 'chrome-2': '#1b2247', hairline: '#2a3358',
+			ink: '#e8ebf6', 'ink-2': '#9aa4c6', 'ink-3': '#5e688e',
+			up: '#1fa88f', down: '#f0525f', accent: '#7d8cff', 'accent-soft': 'rgba(125,140,255,.18)',
+			level: '#e6b455', tline: '#a98cff', danger: '#f0525f',
 		},
-		chart: { grid: 'rgba(255,255,255,0.055)', crossLine: 'rgba(255,255,255,0.16)', axisText: '#57616f', crossText: '#e6eaf0', pill: '#cdd8ea', note: '#a9b4c4' },
+		chart: { grid: 'rgba(130,150,255,0.08)', crossLine: 'rgba(180,192,255,0.2)', axisText: '#5e688e', crossText: '#e8ebf6', pill: '#ccd4f5', note: '#aab3d4' },
 	},
 	paper: {
 		label: 'Paper',
