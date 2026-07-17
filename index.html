@@ -116,9 +116,12 @@
 		<button class="tbtn" id="btnHelp" title="Help &amp; shortcuts — ?" aria-label="Help and shortcuts">
 			<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.8.5-.8 1.1v.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".85" fill="currentColor"/></svg>
 		</button>
-		<button class="tbtn danger" id="btnClear" title="Clear canvas" aria-label="Clear canvas">
-			<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-		</button>
+		<div class="menu-wrap">
+			<button class="tbtn danger" id="btnClear" title="Clear…" aria-haspopup="true" aria-expanded="false" aria-label="Clear">
+				<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			</button>
+			<div class="menu-panel clear-panel" id="panelClear" hidden></div>
+		</div>
 	</div>
 </header>
 
@@ -192,6 +195,8 @@
 </div>
 <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden>
 
+<div id="ctxMenu" class="ctx-menu" role="menu" hidden></div>
+
 <div id="help" class="modal" hidden>
 	<div class="modal-card help-card">
 		<div class="modal-head">
@@ -219,6 +224,8 @@
 					<li><b>Trendline</b> &amp; <b>Arrow</b> — click the start, click the end; endpoints stay draggable. Right-click or Esc returns to the pointer</li>
 					<li><b>Label</b> — click, then type; double-click to edit later</li>
 					<li>Select anything to set its <b>colour, weight, dashes</b> or label size</li>
+					<li><b>Right-click</b> an object to lock, duplicate or delete it; right-click empty space for canvas actions</li>
+					<li>Locked objects can't be moved or deleted until you unlock them</li>
 					<li>Menus add classic <b>Shapes</b> &amp; multi-bar <b>Patterns</b> — click to append or drag onto the chart</li>
 				</ul>
 			</section>
@@ -230,6 +237,7 @@
 					<li><b>Import</b> real OHLC data — CSV or JSON</li>
 					<li>Export <b>CSV</b>, <b>JSON</b>, or a <b>PNG</b> image</li>
 					<li>The <b>link</b> button copies a URL with the whole pattern encoded in it</li>
+					<li>The <b>trash</b> menu clears just the drawings or everything (undo restores)</li>
 				</ul>
 			</section>
 			<section>

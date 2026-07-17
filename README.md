@@ -29,6 +29,9 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Label | `X`, then click and type; double-click a label to edit it later |
 | Zoom / pan | Scroll = price zoom · ⌘/ctrl-scroll = bar zoom · alt-drag or right-drag = pan · drag the axes to scale |
 | Fit / undo / delete | `F` · `⌘Z` / `⇧⌘Z` · `⌫` on selection |
+| Right-click menu | In the pointer tool, right-click an object to Lock / Duplicate / Delete it, or right-click empty space to add a candle. (In a drawing tool, right-click returns to the pointer.) Both menus also offer Clear drawings / Clear all |
+| Lock | Locked objects can't be moved, reshaped or deleted (they show a small padlock); unlock from the inspector or the right-click menu. Persists with the pattern |
+| Clear | Trash-icon dropdown (or the right-click menu): **Clear drawings** removes levels/lines/arrows/labels but keeps candles; **Clear all** wipes the canvas. Both are a single undo step |
 | Themes | Theme menu — Graphite, Midnight, Paper (light), Fjord. Remembered across visits |
 | Save / load patterns | Library menu — name the canvas and Save; click a saved row to load it (undo restores the previous canvas); ✕ deletes. Stored in localStorage |
 | Export data | Library → CSV (`bar,open,high,low,close`) or JSON (candles + levels + trendlines + arrows + labels) |

@@ -161,13 +161,14 @@ function defaultAxis() {
 	return { xMode: 'index', tf: 5, clock: '09:30', date: '2024-01-01', priceDp: null };
 }
 
-/* copy only the style fields that are actually set */
+/* copy only the style/state fields that are actually set */
 function styleOf(v) {
 	const o = {};
 	if (v.color) o.color = v.color;
 	if (v.width != null) o.width = +v.width;
 	if (v.dash != null) o.dash = !!v.dash;
 	if (v.size != null) o.size = +v.size;
+	if (v.locked) o.locked = true;
 	return o;
 }
 
@@ -184,6 +185,7 @@ function importStyle(v) {
 	if (v && isFinite(+v.width)) o.width = clamp(+v.width, 0.5, 12);
 	if (v && typeof v.dash === 'boolean') o.dash = v.dash;
 	if (v && isFinite(+v.size)) o.size = clamp(+v.size, 6, 60);
+	if (v && v.locked === true) o.locked = true;
 	return o;
 }
 
@@ -202,6 +204,14 @@ function sanitizeAxis(a) {
 /* default weights, px */
 const DEF_W = { level: 1, line: 1.6, arrow: 1.8 };
 const DEF_TEXT_SIZE = 13;
+
+/* small padlock glyph drawn on locked objects */
+function lockGlyph(x, y) {
+	const c = COL.axisText;
+	return `<g transform="translate(${(x - 4).toFixed(1)},${(y - 5).toFixed(1)})" opacity="0.9">` +
+		`<rect x="0" y="4" width="8" height="5.6" rx="1.2" fill="${c}"/>` +
+		`<path d="M1.5 4 V2.7 a2.5 2.5 0 0 1 5 0 V4" fill="none" stroke="${c}" stroke-width="1.1"/></g>`;
+}
 
 /* pick dark or light ink for text sitting on a solid color */
 function contrastInk(hex) {
@@ -465,6 +475,8 @@ function addCandleAt(x, y) {
 
 function deleteSelection() {
 	if (!sel) return;
+	const el = findSel();
+	if (el && el.locked) { flashHint('That object is locked — unlock it first'); return; }
 	mutate(() => {
 		for (const k of ['candles', 'levels', 'lines', 'arrows', 'texts']) {
 			doc[k] = doc[k].filter(e => e.id !== sel.id);
@@ -476,8 +488,58 @@ function deleteSelection() {
 }
 
 function flipCandle(c) {
+	if (c.locked) return;
 	mutate(() => { const t = c.o; c.o = c.c; c.c = t; });
 	buildInspector();
+}
+
+function toggleLock(target) {
+	const el = target ? findByHit(target) : findSel();
+	if (!el) return;
+	mutate(() => { if (el.locked) delete el.locked; else el.locked = true; });
+	buildInspector();
+	requestRender();
+	flashHint(el.locked ? 'Locked' : 'Unlocked');
+}
+
+function duplicateObj(target) {
+	const t = target || sel;
+	if (!t) return;
+	const el = findByHit(t);
+	if (!el) return;
+	const copy = JSON.parse(JSON.stringify(el));
+	copy.id = uid();
+	delete copy.locked;
+	const off = avgRange() * 0.25;
+	if (t.type === 'candle') { copy.slot = freeSlot(el.slot + 1); }
+	else if (t.type === 'level') { copy.price = el.price - off; }
+	else if (t.type === 'text') { copy.p = el.p - off; }
+	else { copy.p1 = el.p1 - off; copy.p2 = el.p2 - off; }
+	mutate(() => poolFor(t.type).push(copy));
+	sel = { type: t.type, id: copy.id };
+	buildInspector();
+	requestRender();
+}
+
+function clearDrawings() {
+	const had = doc.levels.length + doc.lines.length + doc.arrows.length + doc.texts.length;
+	if (!had) { flashHint('No drawings to clear'); return; }
+	mutate(() => { doc.levels = []; doc.lines = []; doc.arrows = []; doc.texts = []; });
+	sel = null; hover = null;
+	buildInspector();
+	requestRender();
+	flashHint(`Cleared ${had} drawing${had > 1 ? 's' : ''} — undo to restore`);
+}
+
+function clearAll() {
+	if (doc.candles.length + doc.levels.length + doc.lines.length + doc.arrows.length + doc.texts.length === 0) {
+		flashHint('Canvas is already empty'); return;
+	}
+	mutate(() => { doc = normalizeDoc({ axis: doc.axis }); });
+	sel = null; hover = null;
+	buildInspector();
+	requestRender();
+	flashHint('Cleared everything — undo to restore');
 }
 
 /* ————— gestures ————— */
@@ -638,11 +700,16 @@ svg.addEventListener('pointerdown', e => {
 			if (hit.type === 'candle') dismissTip();
 			sel = { type: hit.type, id: hit.id };
 			const el = findByHit(hit);
-			const g = { mode: 'drag', hit, x0: x, y0: y, orig: { ...el }, pre };
-			if (hit.part === 'bodyTop') g.field = el.c >= el.o ? 'c' : 'o';
-			if (hit.part === 'bodyBottom') g.field = el.c >= el.o ? 'o' : 'c';
-			gesture = g;
-			buildInspector();
+			if (el && el.locked) {
+				/* locked: selectable (so you can unlock it) but immovable */
+				buildInspector();
+			} else {
+				const g = { mode: 'drag', hit, x0: x, y0: y, orig: { ...el }, pre };
+				if (hit.part === 'bodyTop') g.field = el.c >= el.o ? 'c' : 'o';
+				if (hit.part === 'bodyBottom') g.field = el.c >= el.o ? 'o' : 'c';
+				gesture = g;
+				buildInspector();
+			}
 		} else {
 			sel = null;
 			gesture = { mode: 'pan', x0: x, y0: y, v0: { ...view }, pre };
@@ -679,10 +746,16 @@ svg.addEventListener('pointerup', e => {
 	const g = gesture;
 	gesture = null;
 	const p = evPos(e);
-	/* right-click without a drag → back to the pointer tool */
+	/* right-click without a drag: in a drawing tool → back to the pointer;
+	   in the pointer tool → open the context menu */
 	if (g.rightClick && Math.hypot(p.x - g.x0, p.y - g.y0) < 5) {
-		if (tool !== 'select') setTool('select');
-		else cancelPendingLine();
+		if (tool !== 'select') {
+			setTool('select');
+		} else {
+			const hit = (p.x <= W && p.y <= H) ? hitTest(p.x, p.y) : null;
+			if (hit) { sel = { type: hit.type, id: hit.id }; buildInspector(); }
+			showContextMenu(e.clientX, e.clientY, hit, { x: p.x, y: p.y });
+		}
 		requestRender();
 		return;
 	}
@@ -695,7 +768,11 @@ svg.addEventListener('dblclick', e => {
 	const { x, y } = evPos(e);
 	if (x > W || y > H) return;
 	const hit = hitTest(x, y);
-	if (hit && hit.type === 'candle') {
+	const hitEl = hit && findByHit(hit);
+	if (hit && hitEl && hitEl.locked) {
+		sel = { type: hit.type, id: hit.id };
+		buildInspector();
+	} else if (hit && hit.type === 'candle') {
 		const c = findByHit(hit);
 		if (c) flipCandle(c);
 	} else if (hit && hit.type === 'text') {
@@ -711,6 +788,7 @@ svg.addEventListener('contextmenu', e => e.preventDefault());
 
 svg.addEventListener('wheel', e => {
 	e.preventDefault();
+	closeContextMenu();
 	const { x, y } = evPos(e);
 	/* Firefox reports deltas in lines (deltaMode 1) or pages (2), not pixels —
 	   normalize so zoom speed matches across browsers */
@@ -761,6 +839,8 @@ function updateCursorStyle(p) {
 
 function cursorFor(hit) {
 	if (!hit) return 'crosshair';
+	const el = findByHit(hit);
+	if (el && el.locked) return 'default';
 	if (hit.type === 'candle') return hit.part === 'body' ? 'grab' : 'ns-resize';
 	if (hit.type === 'level') return 'ns-resize';
 	if (hit.type === 'text') return hit.part === 'body' ? 'grab' : 'move';
@@ -797,7 +877,8 @@ window.addEventListener('keydown', e => {
 		case 'x': case 'X': setTool('text'); break;
 		case 'f': case 'F': fitView(); break;
 		case 'Escape':
-			if (!helpEl.hidden) toggleHelp(false);
+			if (ctxOpen) closeContextMenu();
+			else if (!helpEl.hidden) toggleHelp(false);
 			else if (!modalEl.hidden) closeModal();
 			else if (openMenu) closeMenus();
 			else if (pendingLine) { cancelPendingLine(); requestRender(); }
@@ -854,28 +935,73 @@ document.getElementById('btnRedo').addEventListener('click', redo);
 document.getElementById('btnFit').addEventListener('click', fitView);
 document.getElementById('btnPng').addEventListener('click', exportPng);
 
-const btnClear = document.getElementById('btnClear');
-let clearArmed = null;
-btnClear.addEventListener('click', () => {
-	if (clearArmed) {
-		clearTimeout(clearArmed);
-		clearArmed = null;
-		btnClear.classList.remove('confirm');
-		btnClear.title = 'Clear canvas';
-		mutate(() => { doc = normalizeDoc({ axis: doc.axis }); });
-		sel = null; hover = null;
-		buildInspector();
-		requestRender();
+/* clear dropdown */
+const clearPanel = document.getElementById('panelClear');
+wireMenuToggle(document.getElementById('btnClear'), clearPanel);
+const trashSmall = '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+clearPanel.innerHTML =
+	`<button class="clear-item" id="clrDraw">${trashSmall}Clear drawings</button>` +
+	`<button class="clear-item danger" id="clrAll">${trashSmall}Clear all</button>`;
+clearPanel.querySelector('#clrDraw').addEventListener('click', () => { clearDrawings(); closeMenus(); });
+clearPanel.querySelector('#clrAll').addEventListener('click', () => { clearAll(); closeMenus(); });
+
+/* ————— right-click context menu ————— */
+
+const ctxEl = document.getElementById('ctxMenu');
+let ctxOpen = false;
+
+const ICON = {
+	lock: '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.4 0V7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+	unlock: '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.2-1" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+	dup: '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 5.5V4a1.4 1.4 0 0 0-1.4-1.4H4A1.4 1.4 0 0 0 2.6 4v5.1A1.4 1.4 0 0 0 4 10.5h1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+	del: '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+	add: '<svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+	trash: trashSmall,
+};
+
+const OBJ_NAME = { candle: 'candle', level: 'level', line: 'trendline', arrow: 'arrow', text: 'label' };
+
+function closeContextMenu() {
+	if (!ctxOpen) return;
+	ctxEl.hidden = true;
+	ctxEl.innerHTML = '';
+	ctxOpen = false;
+}
+
+function showContextMenu(clientX, clientY, hit, svgPos) {
+	closeMenus();
+	const items = [];
+	if (hit) {
+		const el = findByHit(hit);
+		const locked = !!(el && el.locked);
+		items.push({ label: locked ? 'Unlock' : 'Lock', icon: locked ? ICON.unlock : ICON.lock, act: () => toggleLock(hit) });
+		items.push({ label: 'Duplicate', icon: ICON.dup, act: () => duplicateObj(hit) });
+		if (!locked) items.push({ label: 'Delete ' + (OBJ_NAME[hit.type] || 'object'), icon: ICON.del, danger: true, act: () => { sel = { type: hit.type, id: hit.id }; deleteSelection(); requestRender(); } });
+		items.push({ sep: true });
 	} else {
-		btnClear.classList.add('confirm');
-		btnClear.title = 'Click again to clear everything';
-		clearArmed = setTimeout(() => {
-			clearArmed = null;
-			btnClear.classList.remove('confirm');
-			btnClear.title = 'Clear canvas';
-		}, 2200);
+		items.push({ label: 'Add candle here', icon: ICON.add, act: () => addCandleAt(svgPos.x, svgPos.y) });
+		items.push({ sep: true });
 	}
-});
+	items.push({ label: 'Clear drawings', icon: ICON.trash, act: clearDrawings });
+	items.push({ label: 'Clear all', icon: ICON.trash, danger: true, act: clearAll });
+
+	ctxEl.innerHTML = items.map((it, i) => it.sep
+		? '<div class="ctx-sep"></div>'
+		: `<button class="ctx-item${it.danger ? ' danger' : ''}" role="menuitem" data-i="${i}">${it.icon || ''}${escHtml(it.label)}</button>`).join('');
+	ctxEl.hidden = false;
+	ctxOpen = true;
+
+	const r = ctxEl.getBoundingClientRect();
+	let x = clientX, y = clientY;
+	if (x + r.width > window.innerWidth - 6) x = window.innerWidth - r.width - 6;
+	if (y + r.height > window.innerHeight - 6) y = window.innerHeight - r.height - 6;
+	ctxEl.style.left = Math.max(6, x) + 'px';
+	ctxEl.style.top = Math.max(6, y) + 'px';
+
+	ctxEl.querySelectorAll('.ctx-item').forEach(btn => {
+		btn.addEventListener('click', () => { const it = items[+btn.dataset.i]; closeContextMenu(); it.act(); });
+	});
+}
 
 function fitView() {
 	let pLo = Infinity, pHi = -Infinity, sLo = Infinity, sHi = -Infinity;
@@ -1107,6 +1233,7 @@ buildMenu('btnPatterns', 'panelPatterns', PATTERNS);
 /* close menus on outside click */
 document.addEventListener('pointerdown', e => {
 	if (openMenu && !e.target.closest('.menu-wrap')) closeMenus();
+	if (ctxOpen && !e.target.closest('.ctx-menu')) closeContextMenu();
 });
 
 /* ————— pattern library ————— */
@@ -1241,7 +1368,7 @@ function exportJson() {
 	const seg = l => ({ x1: numOut(l.x1), p1: numOut(l.p1), x2: numOut(l.x2), p2: numOut(l.p2), ...styleOf(l) });
 	const data = {
 		axis: { ...doc.axis },
-		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c), ...(c.color ? { color: c.color } : {}) })),
+		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c), ...styleOf(c) })),
 		levels: doc.levels.map(l => ({ price: numOut(l.price), ...styleOf(l) })),
 		lines: doc.lines.map(seg),
 		arrows: doc.arrows.map(seg),
@@ -1271,7 +1398,7 @@ function parseImport(text) {
 		candles = arr.map(k => ({
 			slot: Number.isFinite(k.slot) ? k.slot : undefined,
 			o: num(k.o ?? k.open), h: num(k.h ?? k.high), l: num(k.l ?? k.low), c: num(k.c ?? k.close),
-			...(cleanColor(k.color) ? { color: cleanColor(k.color) } : {}),
+			...importStyle(k),
 		}));
 		if (!Array.isArray(data) && Array.isArray(data.levels)) {
 			levels = data.levels.map(v => ({ price: num(v.price ?? v), ...importStyle(v) })).filter(v => isFinite(v.price));
@@ -1329,7 +1456,7 @@ function doImport(text) {
 	mutate(() => {
 		doc = normalizeDoc({
 			axis: r.axis || doc.axis,
-			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c, ...(v.color ? { color: v.color } : {}) })),
+			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c, ...importStyle(v) })),
 			levels: r.levels.map(v => ({ id: uid(), price: v.price, ...styleOf(v) })),
 			lines: r.lines.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
 			arrows: r.arrows.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
@@ -1522,6 +1649,26 @@ function buildInspector() {
 		return;
 	}
 	const trashSvg = '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+	/* locked object: read-only card with just an unlock action */
+	if (el.locked) {
+		const name = { candle: 'Candle', level: 'Price level', line: 'Trendline', arrow: 'Arrow', text: 'Label' }[sel.type];
+		inspectorEl.innerHTML = `
+			<div class="insp-head">
+				<span class="insp-dot" style="background:${effColor(sel.type, el)}"></span>
+				<span class="insp-title">${name} · locked</span>
+			</div>
+			<div class="insp-locked">
+				<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.4 0V7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+				<span>Locked — can't be moved or deleted.</span>
+			</div>
+			<div class="insp-actions"><button data-act="unlock">Unlock</button></div>`;
+		inspectorEl.hidden = false;
+		inspectorEl.querySelector('[data-act="unlock"]').addEventListener('click', () => toggleLock());
+		updateReadout();
+		return;
+	}
+
 	let html = '';
 	if (sel.type === 'candle') {
 		const up = el.c >= el.o;
@@ -1759,7 +1906,7 @@ function buildScene(ui) {
 		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="${col}" stroke-width="${w}"${dash} opacity="${op}"/>`);
 		if (ui) {
 			parts.push(tag(W, y, fmt(lv.price), col, contrastInk(col)));
-			if (isSel) parts.push(`<circle cx="${W / 2}" cy="${y.toFixed(1)}" r="4" fill="${COL.bg}" stroke="${COL.accent}" stroke-width="1.5"/>`);
+			if (isSel && !lv.locked) parts.push(`<circle cx="${W / 2}" cy="${y.toFixed(1)}" r="4" fill="${COL.bg}" stroke="${COL.accent}" stroke-width="1.5"/>`);
 		}
 	}
 
@@ -1773,7 +1920,7 @@ function buildScene(ui) {
 		const w = (ln.width != null ? ln.width : DEF_W.line) + (isSel || isHov ? 0.5 : 0);
 		const dash = ln.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
 		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.9}"/>`);
-		if (ui && (isSel || isHov)) {
+		if (ui && (isSel || isHov) && !ln.locked) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
 				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
@@ -1798,7 +1945,7 @@ function buildScene(ui) {
 		const dash = ar.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
 		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.92}"/>`);
 		parts.push(`<path d="M${x2.toFixed(1)} ${y2.toFixed(1)} L${p1x.toFixed(1)} ${p1y.toFixed(1)} L${p2x.toFixed(1)} ${p2y.toFixed(1)} Z" fill="${col}" opacity="${isSel ? 1 : 0.92}"/>`);
-		if (ui && (isSel || isHov)) {
+		if (ui && (isSel || isHov) && !ar.locked) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
 				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
@@ -1822,7 +1969,7 @@ function buildScene(ui) {
 		parts.push(`<line x1="${cx.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="1.4"/>`);
 		parts.push(`<rect x="${(cx - bw / 2).toFixed(1)}" y="${bt.toFixed(1)}" width="${bw.toFixed(1)}" height="${(bb - bt).toFixed(1)}" rx="1" fill="${col}"/>`);
 
-		if (ui && (isSel || isHov)) {
+		if (ui && (isSel || isHov) && !c.locked) {
 			const em = part =>
 				(isHov && hover.part === part) ||
 				(gesture && gesture.hit && gesture.hit.id === c.id && gesture.hit.part === part);
@@ -1856,6 +2003,24 @@ function buildScene(ui) {
 			parts.push(`<rect x="${(cx - b.halfW).toFixed(1)}" y="${(cy - b.halfH).toFixed(1)}" width="${(b.halfW * 2).toFixed(1)}" height="${(b.halfH * 2).toFixed(1)}" rx="4" fill="${COL.chrome}" stroke="${isSel ? COL.accent : COL.hairline}" stroke-width="${isSel ? 1.4 : 1}"/>`);
 		}
 		parts.push(`<text x="${cx.toFixed(1)}" y="${(cy + size * 0.34).toFixed(1)}" fill="${col}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="${size}" font-weight="500" text-anchor="middle" font-style="${t.text ? 'normal' : 'italic'}">${escHtml(label)}</text>`);
+	}
+
+	/* lock badges on locked objects */
+	if (ui) {
+		for (const c of doc.candles) if (c.locked) {
+			const x = slotToX(c.slot); if (x >= 0 && x <= W) parts.push(lockGlyph(x, priceToY(c.h) - 9));
+		}
+		for (const lv of doc.levels) if (lv.locked) {
+			const y = priceToY(lv.price); if (y >= 0 && y <= H) parts.push(lockGlyph(14, y - 9));
+		}
+		for (const ln of [...doc.lines, ...doc.arrows]) if (ln.locked) {
+			const mx = (slotToX(ln.x1) + slotToX(ln.x2)) / 2, my = (priceToY(ln.p1) + priceToY(ln.p2)) / 2;
+			if (mx >= 0 && mx <= W && my >= 0 && my <= H) parts.push(lockGlyph(mx, my - 9));
+		}
+		for (const t of doc.texts) if (t.locked && editingTextId !== t.id) {
+			const b = textBox(t); const x = b.cx + b.halfW + 7;
+			if (x >= 0 && x <= W && b.cy >= 0 && b.cy <= H) parts.push(lockGlyph(x, b.cy));
+		}
 	}
 
 	/* palette drop ghost */
@@ -2034,7 +2199,7 @@ function encodeDoc(d) {
 	const seg = l => { const s = st(l); const base = [numOut(l.x1), numOut(l.p1), numOut(l.x2), numOut(l.p2)]; return s ? [...base, s] : base; };
 	const payload = {
 		x: { ...d.axis },
-		c: sortedCandles().map(c => c.color ? [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c), { color: c.color }] : [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c)]),
+		c: sortedCandles().map(c => { const s = st(c); const base = [c.slot, numOut(c.o), numOut(c.h), numOut(c.l), numOut(c.c)]; return s ? [...base, s] : base; }),
 		v: d.levels.map(l => { const s = st(l); return s ? [numOut(l.price), s] : numOut(l.price); }),
 		l: d.lines.map(seg),
 		a: d.arrows.map(seg),
