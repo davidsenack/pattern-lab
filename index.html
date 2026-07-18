@@ -195,6 +195,56 @@
 </div>
 <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden>
 
+<div id="market" class="modal" hidden>
+	<div class="modal-card">
+		<div class="modal-head">
+			<span class="insp-title">Load market data</span>
+			<button class="tbtn" id="marketClose" title="Close — Esc" aria-label="Close">
+				<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+			</button>
+		</div>
+		<p class="modal-sub">Fetch real OHLC candles from Yahoo Finance. Try a stock (<span class="mono">AAPL</span>), index (<span class="mono">^GSPC</span>), future (<span class="mono">ES=F</span>), FX (<span class="mono">EURUSD=X</span>) or crypto (<span class="mono">BTC-USD</span>). The last 300 bars are kept.</p>
+		<div class="market-form">
+			<div class="market-field wide">
+				<label for="mktSymbol">Symbol</label>
+				<input id="mktSymbol" type="text" spellcheck="false" autocapitalize="characters" placeholder="AAPL" value="AAPL">
+			</div>
+			<div class="market-field">
+				<label for="mktInterval">Interval</label>
+				<select id="mktInterval">
+					<option value="1d" selected>1 day</option>
+					<option value="1wk">1 week</option>
+					<option value="1mo">1 month</option>
+					<option value="60m">1 hour</option>
+					<option value="30m">30 min</option>
+					<option value="15m">15 min</option>
+					<option value="5m">5 min</option>
+					<option value="1m">1 min</option>
+				</select>
+			</div>
+			<div class="market-field">
+				<label for="mktRange">Range</label>
+				<select id="mktRange">
+					<option value="1mo">1 month</option>
+					<option value="3mo" selected>3 months</option>
+					<option value="6mo">6 months</option>
+					<option value="1y">1 year</option>
+					<option value="2y">2 years</option>
+					<option value="5y">5 years</option>
+					<option value="5d">5 days</option>
+				</select>
+			</div>
+		</div>
+		<p id="marketErr" class="modal-err" hidden></p>
+		<div class="modal-actions">
+			<span class="market-note">Public market data via a CORS proxy — your drawings are never sent.</span>
+			<span class="spacer"></span>
+			<button id="marketCancel" class="ghost-btn">Cancel</button>
+			<button id="marketLoad" class="primary-btn">Load</button>
+		</div>
+	</div>
+</div>
+
 <div id="ctxMenu" class="ctx-menu" role="menu" hidden></div>
 
 <div id="confirm" class="modal" hidden>
@@ -232,6 +282,7 @@
 					<li>Pull the <b>body pills</b> to set the open &amp; close</li>
 					<li><b>Double-click</b> empty space to add a candle, or a candle to flip it</li>
 					<li>Select one to type exact O/H/L/C values or recolour it</li>
+					<li><b>Drag a box</b> on empty space to select many at once, then move or delete them together (alt-drag still pans)</li>
 				</ul>
 			</section>
 			<section>
@@ -251,7 +302,8 @@
 				<ul>
 					<li><b>Axis</b> menu — label the bottom axis with clock time on any timeframe, and set price decimals</li>
 					<li><b>Library</b> saves named patterns in your browser</li>
-					<li><b>Import</b> real OHLC data — CSV or JSON</li>
+					<li><b>Load market data</b> — real candles from Yahoo Finance (stocks, futures, FX, crypto)</li>
+					<li><b>Import</b> your own OHLC data — CSV or JSON</li>
 					<li>Export <b>CSV</b>, <b>JSON</b>, or a <b>PNG</b> image</li>
 					<li>The <b>link</b> button copies a URL with the whole pattern encoded in it</li>
 					<li>The <b>trash</b> menu clears just the drawings or everything (undo restores)</li>

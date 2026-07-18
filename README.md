@@ -20,6 +20,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Shapes & Patterns menus | Top-bar dropdowns: classic candles (marubozu, dojis, hammer, star…) and multi-bar patterns (engulfing, morning/evening doji star, harami, soldiers/crows) — click an item to append after the last bar, or drag it onto the chart to drop at an exact bar and price. Appending pins the first open to the prior close; patterns land as one undo step |
 | Reshape candle | Pull the round wick dots (high/low) or the body-edge pills (open/close) — drags are relative, so values never jump to the cursor |
 | Move candle | Drag anywhere else on the candle — vertical moves price, horizontal moves bars (occupied slots swap) |
+| Box-select | Drag a rectangle on empty space to select every object it touches, then drag any one to move them all, or `⌫` to delete them (locked objects are skipped). Alt/right-drag still pans |
 | Flip bull/bear | Double-click the candle, or "Flip direction" in the inspector |
 | Exact values | Select a candle and type into the O/H/L/C inspector fields |
 | Properties bar | Selecting an object fills the bar docked under the toolbar (it never floats over the chart): per-candle colour; colour, weight and solid/dashed for levels, trendlines and arrows; colour and size for labels; plus Flip / Lock / Delete. "↺" resets a colour to the theme default |
@@ -35,6 +36,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Themes | Theme menu — Graphite, Midnight, Paper (light), Fjord. Remembered across visits |
 | Save / load patterns | Library menu — name the canvas and Save; click a saved row to load it (undo restores the previous canvas); ✕ deletes. Stored in localStorage |
 | Export data | Library → CSV (`bar,open,high,low,close`) or JSON (candles + levels + trendlines + arrows + labels) |
+| Load market data | Library → Load market data… — fetch real OHLC candles from Yahoo Finance by symbol (stock `AAPL`, index `^GSPC`, future `ES=F`, FX `EURUSD=X`, crypto `BTC-USD`) at a chosen interval/range. Runs through a public CORS proxy (only the symbol is sent — never your drawings); the time axis is labelled with each bar's real date/time. Last 300 bars kept |
 | Import price data | Library → Import… — paste or choose a file: CSV with an open/high/low/close header (extra columns ignored), bare 4-column `o,h,l,c` rows, or JSON from here. Long series keep their last 300 bars; wick/body inconsistencies are auto-repaired |
 | Export image | PNG button (2× resolution) |
 | Share | Link button copies a URL with the whole pattern encoded in the `#` fragment — no server involved |

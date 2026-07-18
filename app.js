@@ -94,7 +94,8 @@ let doc = { candles: [], levels: [], lines: [], arrows: [], texts: [] };
 let lastPointerType = 'mouse';
 let view = { pMin: 98, pMax: 105, xOff: -1.5, slotW: 46 };
 let tool = 'select';
-let sel = null;				// { type, id }
+let sel = null;				// { type, id } — single selection (drives the props bar + handles)
+let marquee = [];			// [{ type, id }] — multi-selection from a box drag
 let hover = null;			// hit result { type, id, part }
 let cursor = null;			// { x, y } in svg coords
 let gesture = null;
@@ -236,11 +237,21 @@ function parseDateUTC(s) {
 	return Date.UTC(+m[1], +m[2] - 1, +m[3]);
 }
 
+/* format a real epoch-seconds timestamp for the given timeframe */
+function fmtStamp(t, tf) {
+	const d = new Date(t * 1000);
+	if (tf < 1440) return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+	return pad2(d.getUTCMonth() + 1) + '/' + pad2(d.getUTCDate());
+}
+
 /* label for a bar index under the current axis config */
 function xLabel(slot) {
 	const ax = doc.axis;
 	if (!ax || ax.xMode !== 'time') return String(slot);
 	const tf = ax.tf || 5;
+	/* real market data carries its own timestamp per bar */
+	const c = doc.candles.find(k => k.slot === slot && k.t != null);
+	if (c) return fmtStamp(c.t, tf);
 	if (tf < 1440) {
 		let mins = parseClock(ax.clock) + slot * tf;
 		mins = ((mins % 1440) + 1440) % 1440;
@@ -339,12 +350,15 @@ function redo() {
 
 function afterHistory() {
 	if (sel && !findSel()) sel = null;
+	marquee = marquee.filter(m => findByHit(m));
 	hover = null;
 	save();
 	buildInspector();
 	if (typeof renderAxisPanel === 'function') renderAxisPanel();
 	requestRender();
 }
+
+function inMarquee(id) { return marquee.some(m => m.id === id); }
 
 function poolFor(type) {
 	return { candle: doc.candles, level: doc.levels, line: doc.lines, arrow: doc.arrows, text: doc.texts }[type];
@@ -435,6 +449,56 @@ function distSeg(px, py, x1, y1, x2, y2) {
 	return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+/* ————— marquee (box) selection geometry ————— */
+
+function rectsOverlap(ax0, ay0, ax1, ay1, bx0, by0, bx1, by1) {
+	return ax0 <= bx1 && ax1 >= bx0 && ay0 <= by1 && ay1 >= by0;
+}
+
+function ptInRect(px, py, x0, y0, x1, y1) {
+	return px >= x0 && px <= x1 && py >= y0 && py <= y1;
+}
+
+function segSeg(a, b, c, d, e, f, g, h) {
+	const ccw = (x1, y1, x2, y2, x3, y3) => (y3 - y1) * (x2 - x1) - (y2 - y1) * (x3 - x1);
+	const d1 = ccw(a, b, c, d, e, f), d2 = ccw(a, b, c, d, g, h);
+	const d3 = ccw(e, f, g, h, a, b), d4 = ccw(e, f, g, h, c, d);
+	return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+}
+
+function segRect(px0, py0, px1, py1, x0, y0, x1, y1) {
+	if (ptInRect(px0, py0, x0, y0, x1, y1) || ptInRect(px1, py1, x0, y0, x1, y1)) return true;
+	return segSeg(px0, py0, px1, py1, x0, y0, x1, y0) ||
+		segSeg(px0, py0, px1, py1, x1, y0, x1, y1) ||
+		segSeg(px0, py0, px1, py1, x1, y1, x0, y1) ||
+		segSeg(px0, py0, px1, py1, x0, y1, x0, y0);
+}
+
+/* objects whose screen footprint intersects the drag box */
+function objectsInBox(ax, ay, bx, by) {
+	const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+	const y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+	const out = [], bw = bodyW();
+	for (const c of doc.candles) {
+		const cx = slotToX(c.slot);
+		if (rectsOverlap(cx - bw / 2, priceToY(c.h), cx + bw / 2, priceToY(c.l), x0, y0, x1, y1)) out.push({ type: 'candle', id: c.id });
+	}
+	for (const lv of doc.levels) {
+		const y = priceToY(lv.price);
+		if (y >= y0 && y <= y1) out.push({ type: 'level', id: lv.id });
+	}
+	for (const [pool, type] of [[doc.lines, 'line'], [doc.arrows, 'arrow']]) {
+		for (const ln of pool) {
+			if (segRect(slotToX(ln.x1), priceToY(ln.p1), slotToX(ln.x2), priceToY(ln.p2), x0, y0, x1, y1)) out.push({ type, id: ln.id });
+		}
+	}
+	for (const t of doc.texts) {
+		const b = textBox(t);
+		if (rectsOverlap(b.cx - b.halfW, b.cy - b.halfH, b.cx + b.halfW, b.cy + b.halfH, x0, y0, x1, y1)) out.push({ type: 'text', id: t.id });
+	}
+	return out;
+}
+
 /* ————— element ops ————— */
 
 function avgRange() {
@@ -474,6 +538,20 @@ function addCandleAt(x, y) {
 }
 
 function deleteSelection() {
+	if (marquee.length) {
+		const ids = new Set(marquee.map(m => findByHit(m)).filter(el => el && !el.locked).map(el => el.id));
+		const lockedCount = marquee.length - ids.size;
+		if (!ids.size) { flashHint('Those objects are locked — unlock them first'); return; }
+		mutate(() => {
+			for (const k of ['candles', 'levels', 'lines', 'arrows', 'texts']) {
+				doc[k] = doc[k].filter(e => !ids.has(e.id));
+			}
+		});
+		marquee = []; sel = null; hover = null;
+		buildInspector();
+		flashHint(`Deleted ${ids.size} object${ids.size > 1 ? 's' : ''}${lockedCount ? ` (${lockedCount} locked, kept)` : ''}`);
+		return;
+	}
 	if (!sel) return;
 	const el = findSel();
 	if (el && el.locked) { flashHint('That object is locked — unlock it first'); return; }
@@ -502,6 +580,22 @@ function toggleLock(target) {
 	flashHint(el.locked ? 'Locked' : 'Unlocked');
 }
 
+function lockMarquee() {
+	if (!marquee.length) return;
+	const els = marquee.map(m => findByHit(m)).filter(Boolean);
+	const anyUnlocked = els.some(el => !el.locked);	// lock all if any unlocked, else unlock all
+	mutate(() => els.forEach(el => { if (anyUnlocked) el.locked = true; else delete el.locked; }));
+	buildInspector();
+	requestRender();
+	flashHint(anyUnlocked ? `Locked ${els.length} objects` : `Unlocked ${els.length} objects`);
+}
+
+function clearSelection() {
+	sel = null; marquee = []; hover = null;
+	buildInspector();
+	requestRender();
+}
+
 function duplicateObj(target) {
 	const t = target || sel;
 	if (!t) return;
@@ -525,7 +619,7 @@ function clearDrawings() {
 	const had = doc.levels.length + doc.lines.length + doc.arrows.length + doc.texts.length;
 	if (!had) { flashHint('No drawings to clear'); return; }
 	mutate(() => { doc.levels = []; doc.lines = []; doc.arrows = []; doc.texts = []; });
-	sel = null; hover = null;
+	sel = null; hover = null; marquee = [];
 	buildInspector();
 	requestRender();
 	flashHint(`Cleared ${had} drawing${had > 1 ? 's' : ''} — undo to restore`);
@@ -536,7 +630,7 @@ function clearAll() {
 		flashHint('Canvas is already empty'); return;
 	}
 	mutate(() => { doc = normalizeDoc({ axis: doc.axis }); });
-	sel = null; hover = null;
+	sel = null; hover = null; marquee = [];
 	buildInspector();
 	requestRender();
 	flashHint('Cleared everything — undo to restore');
@@ -567,6 +661,30 @@ function applyGesture(x, y) {
 		const anchor = xToSlotF(g.x0);
 		view.slotW = clamp(g.v0.slotW * Math.exp(-(x - g.x0) * 0.004), 5, 130);
 		view.xOff = anchor + 0.5 - g.x0 / view.slotW;
+		return;
+	}
+	if (g.mode === 'marquee') {
+		g.x1 = x; g.y1 = y;
+		marquee = objectsInBox(g.x0, g.y0, x, y);	// live highlight while dragging
+		return;
+	}
+	if (g.mode === 'group') {
+		const dS = (x - g.x0) / view.slotW;
+		for (const m of g.orig) {
+			const el = doc[({ candle: 'candles', level: 'levels', line: 'lines', arrow: 'arrows', text: 'texts' })[m.type]].find(e => e.id === m.snap.id);
+			if (!el || el.locked) continue;			// locked members stay put
+			const o = m.snap;
+			if (m.type === 'candle') {
+				el.o = o.o + dP; el.h = o.h + dP; el.l = o.l + dP; el.c = o.c + dP;
+				el.slot = o.slot + Math.round(dS);
+			} else if (m.type === 'level') {
+				el.price = o.price + dP;
+			} else if (m.type === 'text') {
+				el.x = o.x + dS; el.p = o.p + dP;
+			} else {
+				el.x1 = o.x1 + dS; el.p1 = o.p1 + dP; el.x2 = o.x2 + dS; el.p2 = o.p2 + dP;
+			}
+		}
 		return;
 	}
 
@@ -696,8 +814,14 @@ svg.addEventListener('pointerdown', e => {
 		startTextEdit(t.id, true, pre);
 	} else {
 		const hit = hitTest(x, y);
-		if (hit) {
+		if (hit && marquee.length && marquee.some(m => m.id === hit.id)) {
+			/* grab a member of the box-selection → move the whole group */
+			sel = null;
+			gesture = { mode: 'group', x0: x, y0: y, pre, orig: marquee.map(m => ({ type: m.type, snap: { ...findByHit(m) } })) };
+			buildInspector();
+		} else if (hit) {
 			if (hit.type === 'candle') dismissTip();
+			marquee = [];
 			sel = { type: hit.type, id: hit.id };
 			const el = findByHit(hit);
 			if (el && el.locked) {
@@ -711,9 +835,8 @@ svg.addEventListener('pointerdown', e => {
 				buildInspector();
 			}
 		} else {
-			sel = null;
-			gesture = { mode: 'pan', x0: x, y0: y, v0: { ...view }, pre };
-			buildInspector();
+			/* empty space: rubber-band a selection box (alt/right/middle-drag still pans) */
+			gesture = { mode: 'marquee', x0: x, y0: y, x1: x, y1: y };
 		}
 	}
 	if (gesture) svg.setPointerCapture(e.pointerId);
@@ -753,13 +876,29 @@ svg.addEventListener('pointerup', e => {
 			setTool('select');
 		} else {
 			const hit = (p.x <= W && p.y <= H) ? hitTest(p.x, p.y) : null;
-			if (hit) { sel = { type: hit.type, id: hit.id }; buildInspector(); }
-			showContextMenu(e.clientX, e.clientY, hit, { x: p.x, y: p.y });
+			if (hit && marquee.length && inMarquee(hit.id)) {
+				showContextMenu(e.clientX, e.clientY, hit, { x: p.x, y: p.y }, true);
+			} else {
+				if (hit) { marquee = []; sel = { type: hit.type, id: hit.id }; buildInspector(); }
+				showContextMenu(e.clientX, e.clientY, hit, { x: p.x, y: p.y }, false);
+			}
 		}
 		requestRender();
 		return;
 	}
-	if (g.mode === 'drag' && snap() !== g.pre) pushUndo(g.pre);
+	if (g.mode === 'marquee') {
+		if (Math.hypot(p.x - g.x0, p.y - g.y0) < 5) {
+			sel = null; marquee = [];		// click on empty → clear selection
+		} else {
+			const boxed = objectsInBox(g.x0, g.y0, p.x, p.y);
+			if (boxed.length === 1) { sel = boxed[0]; marquee = []; }
+			else { marquee = boxed; sel = null; }
+		}
+		buildInspector();
+		requestRender();
+		return;
+	}
+	if ((g.mode === 'drag' || g.mode === 'group') && snap() !== g.pre) pushUndo(g.pre);
 	else save();
 	requestRender();
 });
@@ -829,10 +968,13 @@ function updateCursorStyle(p) {
 		cur = gesture.mode === 'pan' ? 'grabbing'
 			: gesture.mode === 'yscale' ? 'ns-resize'
 			: gesture.mode === 'xscale' ? 'ew-resize'
+			: gesture.mode === 'marquee' ? 'crosshair'
+			: gesture.mode === 'group' ? 'grabbing'
 			: gesture.hit && gesture.hit.part === 'body' ? 'grabbing'
 			: cursorFor(gesture.hit);
 	} else if (p.x > W && p.y <= H) cur = 'ns-resize';
 	else if (p.y > H && p.x <= W) cur = 'ew-resize';
+	else if (hover && inMarquee(hover.id)) cur = 'move';
 	else if (hover) cur = cursorFor(hover);
 	svg.style.cursor = cur;
 }
@@ -853,6 +995,10 @@ window.addEventListener('keydown', e => {
 	if (!confirmEl.hidden) {
 		if (e.key === 'Escape') closeConfirm();
 		else if (e.key === 'Enter') acceptConfirm();
+		return;
+	}
+	if (!marketEl.hidden) {
+		if (e.key === 'Escape') closeMarket();
 		return;
 	}
 	const tag = (e.target.tagName || '').toLowerCase();
@@ -887,6 +1033,7 @@ window.addEventListener('keydown', e => {
 			else if (!modalEl.hidden) closeModal();
 			else if (openMenu) closeMenus();
 			else if (pendingLine) { cancelPendingLine(); requestRender(); }
+			else if (marquee.length) clearSelection();
 			else if (tool !== 'select') setTool('select');
 			else { sel = null; buildInspector(); requestRender(); }
 			break;
@@ -974,10 +1121,15 @@ function closeContextMenu() {
 	ctxOpen = false;
 }
 
-function showContextMenu(clientX, clientY, hit, svgPos) {
+function showContextMenu(clientX, clientY, hit, svgPos, group) {
 	closeMenus();
 	const items = [];
-	if (hit) {
+	if (group) {
+		items.push({ label: `Lock / unlock ${marquee.length}`, icon: ICON.lock, act: lockMarquee });
+		items.push({ label: `Delete ${marquee.length} selected`, icon: ICON.del, danger: true, act: () => { deleteSelection(); requestRender(); } });
+		items.push({ label: 'Deselect', act: clearSelection });
+		items.push({ sep: true });
+	} else if (hit) {
 		const el = findByHit(hit);
 		const locked = !!(el && el.locked);
 		items.push({ label: locked ? 'Unlock' : 'Lock', icon: locked ? ICON.unlock : ICON.lock, act: () => toggleLock(hit) });
@@ -1285,6 +1437,7 @@ function renderLibrary() {
 		</div>
 		<div class="lib-list">${rows}</div>
 		<div class="lib-divider"></div>
+		<button id="ioMarket" class="ghost-btn lib-market">↓ Load market data…</button>
 		<div class="lib-io">
 			<button id="ioImport" class="ghost-btn">Import…</button>
 			<button id="ioCsv" class="ghost-btn">CSV</button>
@@ -1309,7 +1462,7 @@ function renderLibrary() {
 			const e = loadLib()[+row.dataset.i];
 			if (!e) return;
 			mutate(() => { doc = remapIds(e.doc); });
-			sel = null; hover = null;
+			sel = null; hover = null; marquee = [];
 			buildInspector();
 			renderAxisPanel();
 			fitView();
@@ -1330,6 +1483,7 @@ function renderLibrary() {
 		});
 	});
 
+	libPanel.querySelector('#ioMarket').addEventListener('click', () => { closeMenus(); openMarket(); });
 	libPanel.querySelector('#ioImport').addEventListener('click', () => { closeMenus(); openModal(); });
 	libPanel.querySelector('#ioCsv').addEventListener('click', () => { exportCsv(); closeMenus(); });
 	libPanel.querySelector('#ioJson').addEventListener('click', () => { exportJson(); closeMenus(); });
@@ -1374,7 +1528,7 @@ function exportJson() {
 	const seg = l => ({ x1: numOut(l.x1), p1: numOut(l.p1), x2: numOut(l.x2), p2: numOut(l.p2), ...styleOf(l) });
 	const data = {
 		axis: { ...doc.axis },
-		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c), ...styleOf(c) })),
+		candles: sortedCandles().map(c => ({ slot: c.slot, o: numOut(c.o), h: numOut(c.h), l: numOut(c.l), c: numOut(c.c), ...(c.t != null ? { t: c.t } : {}), ...styleOf(c) })),
 		levels: doc.levels.map(l => ({ price: numOut(l.price), ...styleOf(l) })),
 		lines: doc.lines.map(seg),
 		arrows: doc.arrows.map(seg),
@@ -1404,6 +1558,7 @@ function parseImport(text) {
 		candles = arr.map(k => ({
 			slot: Number.isFinite(k.slot) ? k.slot : undefined,
 			o: num(k.o ?? k.open), h: num(k.h ?? k.high), l: num(k.l ?? k.low), c: num(k.c ?? k.close),
+			...(isFinite(+k.t) ? { t: +k.t } : {}),
 			...importStyle(k),
 		}));
 		if (!Array.isArray(data) && Array.isArray(data.levels)) {
@@ -1462,14 +1617,14 @@ function doImport(text) {
 	mutate(() => {
 		doc = normalizeDoc({
 			axis: r.axis || doc.axis,
-			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c, ...importStyle(v) })),
+			candles: r.candles.map((v, i) => ({ id: uid(), slot: v.slot !== undefined ? v.slot : i, o: v.o, h: v.h, l: v.l, c: v.c, ...(v.t != null ? { t: v.t } : {}), ...importStyle(v) })),
 			levels: r.levels.map(v => ({ id: uid(), price: v.price, ...styleOf(v) })),
 			lines: r.lines.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
 			arrows: r.arrows.map(v => ({ id: uid(), x1: v.x1, p1: v.p1, x2: v.x2, p2: v.p2, ...styleOf(v) })),
 			texts: r.texts.map(v => ({ id: uid(), x: v.x, p: v.p, text: v.text, ...(v.color ? { color: v.color } : {}), ...(v.size ? { size: v.size } : {}) })),
 		});
 	});
-	sel = null; hover = null;
+	sel = null; hover = null; marquee = [];
 	buildInspector();
 	renderAxisPanel();
 	fitView();
@@ -1550,6 +1705,110 @@ function clearAllConfirm() {
 	if (!n) { flashHint('Canvas is already empty'); return; }
 	askConfirm('Clear everything?', `This removes all ${n} object${n > 1 ? 's' : ''} on the canvas. You can undo it afterward.`, 'Clear all', clearAll);
 }
+
+/* ————— market data (Yahoo Finance via CORS proxy) ————— */
+
+const marketEl = document.getElementById('market');
+const marketErr = document.getElementById('marketErr');
+const marketLoadBtn = document.getElementById('marketLoad');
+const IV_TF = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '60m': 60, '1d': 1440, '1wk': 10080, '1mo': 10080 };
+
+function openMarket() {
+	marketEl.hidden = false;
+	marketErr.hidden = true;
+	const inp = document.getElementById('mktSymbol');
+	requestAnimationFrame(() => { inp.focus(); inp.select(); });
+}
+
+function closeMarket() { marketEl.hidden = true; }
+
+const PROXIES = [
+	u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+	u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+	u => `https://thingproxy.freeboard.io/fetch/${u}`,
+];
+
+async function fetchYahoo(symbol, interval, range) {
+	const yurl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+	let lastErr;
+	for (const proxy of PROXIES) {
+		try {
+			const res = await fetch(proxy(yurl), { headers: { Accept: 'application/json' } });
+			if (!res.ok) { lastErr = new Error('HTTP ' + res.status); continue; }
+			const data = await res.json();
+			if (data && data.chart) return data;
+			lastErr = new Error('Unexpected response');
+		} catch (e) { lastErr = e; }
+	}
+	throw lastErr || new Error('All data proxies failed');
+}
+
+function parseYahoo(data, symbol) {
+	const chart = data.chart;
+	if (chart.error) throw new Error(chart.error.description || 'Symbol not found');
+	const r = chart.result && chart.result[0];
+	if (!r || !r.timestamp || !r.indicators || !r.indicators.quote) {
+		throw new Error(`No data for “${symbol}”. Check the symbol and try again.`);
+	}
+	const ts = r.timestamp, q = r.indicators.quote[0];
+	const rows = [];
+	for (let i = 0; i < ts.length; i++) {
+		const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
+		if ([o, h, l, c].every(v => typeof v === 'number' && isFinite(v))) {
+			rows.push({ t: ts[i], o, h, l, c });
+		}
+	}
+	if (!rows.length) throw new Error(`No usable candles for “${symbol}”.`);
+	return rows;
+}
+
+async function loadMarket() {
+	const symbol = document.getElementById('mktSymbol').value.trim();
+	const interval = document.getElementById('mktInterval').value;
+	const range = document.getElementById('mktRange').value;
+	if (!symbol) { marketErr.textContent = 'Enter a symbol.'; marketErr.hidden = false; return; }
+
+	marketErr.hidden = true;
+	marketLoadBtn.textContent = 'Loading…';
+	marketLoadBtn.disabled = true;
+	document.querySelector('.market-form').classList.add('busy');
+	try {
+		const data = await fetchYahoo(symbol, interval, range);
+		let rows = parseYahoo(data, symbol);
+		let note = '';
+		if (rows.length > MAX_IMPORT) { note = ` (last ${MAX_IMPORT} of ${rows.length})`; rows = rows.slice(-MAX_IMPORT); }
+		for (const k of rows) { k.h = Math.max(k.h, k.o, k.c); k.l = Math.min(k.l, k.o, k.c); }
+		const tf = IV_TF[interval] || 1440;
+		mutate(() => {
+			doc = normalizeDoc({
+				axis: { ...doc.axis, xMode: 'time', tf },
+				candles: rows.map((k, i) => ({ id: uid(), slot: i, o: k.o, h: k.h, l: k.l, c: k.c, t: k.t })),
+			});
+		});
+		sel = null; hover = null; marquee = [];
+		buildInspector();
+		renderAxisPanel();
+		fitView();
+		closeMarket();
+		const span = `${fmtStamp(rows[0].t, tf)}–${fmtStamp(rows[rows.length - 1].t, tf)}`;
+		flashHint(`Loaded ${symbol.toUpperCase()} — ${rows.length} bars ${span}${note} · undo restores your canvas`);
+	} catch (e) {
+		marketErr.textContent = /Failed to fetch|NetworkError|proxies/.test(String(e.message))
+			? 'Could not reach the data service. It may be rate-limited — try again in a moment.'
+			: e.message;
+		marketErr.hidden = false;
+	} finally {
+		marketLoadBtn.textContent = 'Load';
+		marketLoadBtn.disabled = false;
+		document.querySelector('.market-form').classList.remove('busy');
+	}
+}
+
+marketLoadBtn.addEventListener('click', loadMarket);
+document.getElementById('marketCancel').addEventListener('click', closeMarket);
+document.getElementById('marketClose').addEventListener('click', closeMarket);
+marketEl.addEventListener('pointerdown', e => { if (e.target === marketEl) closeMarket(); });
+document.getElementById('mktSymbol').addEventListener('keydown', e => { if (e.key === 'Enter') loadMarket(); });
 
 /* ————— inline text editor ————— */
 
@@ -1677,6 +1936,26 @@ function pStyle(type, el) {
 function buildInspector() {
 	const el = findSel();
 	inspectorEl.hidden = false;		// the bar is always docked so the chart never reflows
+	const trashSvg = '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+	/* multi-selection from a box drag */
+	if (marquee.length && tool === 'select') {
+		const lockIcon = '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.4 0V7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+		inspectorEl.innerHTML =
+			`<span class="p-dot" style="background:${COL.accent}"></span>` +
+			`<span class="p-title">${marquee.length} objects selected</span><span class="p-div"></span>` +
+			`<span class="p-empty">Drag any one to move them together</span>` +
+			`<span class="p-spacer"></span>` +
+			`<button class="p-btn" data-gact="lock" title="Lock / unlock all">${lockIcon}</button>` +
+			`<button class="p-btn wide" data-gact="clear">Deselect</button>` +
+			`<button class="p-btn danger" data-gact="del" title="Delete selected">${trashSvg}</button>`;
+		inspectorEl.querySelector('[data-gact="lock"]').addEventListener('click', lockMarquee);
+		inspectorEl.querySelector('[data-gact="clear"]').addEventListener('click', clearSelection);
+		inspectorEl.querySelector('[data-gact="del"]').addEventListener('click', () => { deleteSelection(); requestRender(); });
+		updateReadout();
+		return;
+	}
+
 	/* it's an editing surface — populated only in the pointer tool with a
 	   selection; otherwise a muted placeholder keeps the layout stable */
 	if (!el || tool !== 'select') {
@@ -1687,7 +1966,6 @@ function buildInspector() {
 		updateReadout();
 		return;
 	}
-	const trashSvg = '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 	const dot = `<span class="p-dot" style="background:${effColor(sel.type, el)}"></span>`;
 	const numField = (k, label) => `<div class="field"><label>${label}</label><input type="number" step="0.25" data-k="${k}" value="${fmt(el[k])}"></div>`;
@@ -1825,6 +2103,10 @@ function syncInspectorValues() {
 
 function updateReadout() {
 	const el = findSel();
+	if (marquee.length) {
+		readoutEl.innerHTML = `<span><b>${marquee.length}</b> selected</span>`;
+		return;
+	}
 	if (el && sel.type === 'candle') {
 		const up = el.c >= el.o;
 		readoutEl.innerHTML =
@@ -1906,7 +2188,7 @@ function buildScene(ui) {
 		parts.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="${col}" stroke-width="${w}"${dash} opacity="${op}"/>`);
 		if (ui) {
 			parts.push(tag(W, y, fmt(lv.price), col, contrastInk(col)));
-			if (isSel && !lv.locked) parts.push(`<circle cx="${W / 2}" cy="${y.toFixed(1)}" r="4" fill="${COL.bg}" stroke="${COL.accent}" stroke-width="1.5"/>`);
+			if (isSel && !lv.locked && !inMarquee(lv.id)) parts.push(`<circle cx="${W / 2}" cy="${y.toFixed(1)}" r="4" fill="${COL.bg}" stroke="${COL.accent}" stroke-width="1.5"/>`);
 		}
 	}
 
@@ -1920,7 +2202,7 @@ function buildScene(ui) {
 		const w = (ln.width != null ? ln.width : DEF_W.line) + (isSel || isHov ? 0.5 : 0);
 		const dash = ln.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
 		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.9}"/>`);
-		if (ui && (isSel || isHov) && !ln.locked) {
+		if (ui && (isSel || isHov) && !ln.locked && !inMarquee(ln.id)) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
 				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
@@ -1945,7 +2227,7 @@ function buildScene(ui) {
 		const dash = ar.dash ? ` stroke-dasharray="${(w * 3).toFixed(1)} ${(w * 2.6).toFixed(1)}"` : '';
 		parts.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${col}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"${dash} opacity="${isSel ? 1 : 0.92}"/>`);
 		parts.push(`<path d="M${x2.toFixed(1)} ${y2.toFixed(1)} L${p1x.toFixed(1)} ${p1y.toFixed(1)} L${p2x.toFixed(1)} ${p2y.toFixed(1)} Z" fill="${col}" opacity="${isSel ? 1 : 0.92}"/>`);
-		if (ui && (isSel || isHov) && !ar.locked) {
+		if (ui && (isSel || isHov) && !ar.locked && !inMarquee(ar.id)) {
 			for (const [px, py] of [[x1, y1], [x2, y2]]) {
 				parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${COL.bg}" stroke="${isSel ? COL.accent : col}" stroke-width="1.5"/>`);
 			}
@@ -1969,7 +2251,7 @@ function buildScene(ui) {
 		parts.push(`<line x1="${cx.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="1.4"/>`);
 		parts.push(`<rect x="${(cx - bw / 2).toFixed(1)}" y="${bt.toFixed(1)}" width="${bw.toFixed(1)}" height="${(bb - bt).toFixed(1)}" rx="1" fill="${col}"/>`);
 
-		if (ui && (isSel || isHov) && !c.locked) {
+		if (ui && (isSel || isHov) && !c.locked && !inMarquee(c.id)) {
 			const em = part =>
 				(isHov && hover.part === part) ||
 				(gesture && gesture.hit && gesture.hit.id === c.id && gesture.hit.part === part);
@@ -2021,6 +2303,25 @@ function buildScene(ui) {
 			const b = textBox(t); const x = b.cx + b.halfW + 7;
 			if (x >= 0 && x <= W && b.cy >= 0 && b.cy <= H) parts.push(lockGlyph(x, b.cy));
 		}
+	}
+
+	/* marquee: highlight boxed members + the live drag rectangle */
+	if (ui && marquee.length) {
+		for (const m of marquee) {
+			const el = findByHit(m);
+			if (!el) continue;
+			let a, b2, c2, d2;
+			if (m.type === 'candle') { const cx = slotToX(el.slot), hw = bodyW() / 2 + 3; a = cx - hw; b2 = priceToY(el.h) - 3; c2 = cx + hw; d2 = priceToY(el.l) + 3; }
+			else if (m.type === 'level') { const y = priceToY(el.price); a = 1; b2 = y - 4; c2 = W - 1; d2 = y + 4; }
+			else if (m.type === 'text') { const bx = textBox(el); a = bx.cx - bx.halfW - 2; b2 = bx.cy - bx.halfH - 2; c2 = bx.cx + bx.halfW + 2; d2 = bx.cy + bx.halfH + 2; }
+			else { const xa = slotToX(el.x1), xb = slotToX(el.x2), ya = priceToY(el.p1), yb = priceToY(el.p2); a = Math.min(xa, xb) - 4; b2 = Math.min(ya, yb) - 4; c2 = Math.max(xa, xb) + 4; d2 = Math.max(ya, yb) + 4; }
+			parts.push(`<rect x="${a.toFixed(1)}" y="${b2.toFixed(1)}" width="${(c2 - a).toFixed(1)}" height="${(d2 - b2).toFixed(1)}" rx="3" fill="${COL.accent}" fill-opacity="0.07" stroke="${COL.accent}" stroke-width="1" stroke-dasharray="3 3"/>`);
+		}
+	}
+	if (ui && gesture && gesture.mode === 'marquee') {
+		const x0 = Math.min(gesture.x0, gesture.x1), y0 = Math.min(gesture.y0, gesture.y1);
+		const w2 = Math.abs(gesture.x1 - gesture.x0), h2 = Math.abs(gesture.y1 - gesture.y0);
+		parts.push(`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${w2.toFixed(1)}" height="${h2.toFixed(1)}" fill="${COL.accent}" fill-opacity="0.08" stroke="${COL.accent}" stroke-width="1" stroke-dasharray="4 3"/>`);
 	}
 
 	/* palette drop ghost */
@@ -2335,5 +2636,6 @@ window.__lab = {
 	get doc() { return doc; },
 	get view() { return view; },
 	get sel() { return sel; },
+	get marquee() { return marquee; },
 	get tool() { return tool; },
 };
