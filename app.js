@@ -1762,6 +1762,29 @@ function parseYahoo(data, symbol) {
 	return rows;
 }
 
+/* fetch + parse + clamp — shared by the modal and the first-visit preload */
+async function getMarketRows(symbol, interval, range) {
+	const data = await fetchYahoo(symbol, interval, range);
+	let rows = parseYahoo(data, symbol);
+	const total = rows.length;
+	if (rows.length > MAX_IMPORT) rows = rows.slice(-MAX_IMPORT);
+	for (const k of rows) { k.h = Math.max(k.h, k.o, k.c); k.l = Math.min(k.l, k.o, k.c); }
+	return { rows, total };
+}
+
+function marketDoc(rows, interval, baseAxis) {
+	const tf = IV_TF[interval] || 1440;
+	return normalizeDoc({
+		axis: { ...(baseAxis || defaultAxis()), xMode: 'time', tf },
+		candles: rows.map((k, i) => ({ id: uid(), slot: i, o: k.o, h: k.h, l: k.l, c: k.c, t: k.t })),
+	});
+}
+
+function marketSpan(rows, interval) {
+	const tf = IV_TF[interval] || 1440;
+	return `${fmtStamp(rows[0].t, tf)}–${fmtStamp(rows[rows.length - 1].t, tf)}`;
+}
+
 async function loadMarket() {
 	const symbol = document.getElementById('mktSymbol').value.trim();
 	const interval = document.getElementById('mktInterval').value;
@@ -1773,25 +1796,15 @@ async function loadMarket() {
 	marketLoadBtn.disabled = true;
 	document.querySelector('.market-form').classList.add('busy');
 	try {
-		const data = await fetchYahoo(symbol, interval, range);
-		let rows = parseYahoo(data, symbol);
-		let note = '';
-		if (rows.length > MAX_IMPORT) { note = ` (last ${MAX_IMPORT} of ${rows.length})`; rows = rows.slice(-MAX_IMPORT); }
-		for (const k of rows) { k.h = Math.max(k.h, k.o, k.c); k.l = Math.min(k.l, k.o, k.c); }
-		const tf = IV_TF[interval] || 1440;
-		mutate(() => {
-			doc = normalizeDoc({
-				axis: { ...doc.axis, xMode: 'time', tf },
-				candles: rows.map((k, i) => ({ id: uid(), slot: i, o: k.o, h: k.h, l: k.l, c: k.c, t: k.t })),
-			});
-		});
+		const { rows, total } = await getMarketRows(symbol, interval, range);
+		mutate(() => { doc = marketDoc(rows, interval, doc.axis); });
 		sel = null; hover = null; marquee = [];
 		buildInspector();
 		renderAxisPanel();
 		fitView();
 		closeMarket();
-		const span = `${fmtStamp(rows[0].t, tf)}–${fmtStamp(rows[rows.length - 1].t, tf)}`;
-		flashHint(`Loaded ${symbol.toUpperCase()} — ${rows.length} bars ${span}${note} · undo restores your canvas`);
+		const note = total > rows.length ? ` (last ${rows.length} of ${total})` : '';
+		flashHint(`Loaded ${symbol.toUpperCase()} — ${rows.length} bars ${marketSpan(rows, interval)}${note} · undo restores your canvas`);
 	} catch (e) {
 		marketErr.textContent = /Failed to fetch|NetworkError|proxies/.test(String(e.message))
 			? 'Could not reach the data service. It may be rate-limited — try again in a moment.'
@@ -1801,6 +1814,27 @@ async function loadMarket() {
 		marketLoadBtn.textContent = 'Load';
 		marketLoadBtn.disabled = false;
 		document.querySelector('.market-form').classList.remove('busy');
+	}
+}
+
+/* first-visit preload: replace the synthetic seed with real candles.
+   Runs only when nothing was saved/shared and the user hasn't edited yet. */
+const PRELOAD = { symbol: 'AAPL', interval: '1d', range: '3mo' };
+async function preloadMarket() {
+	flashHint('Loading live market data…');
+	try {
+		const { rows } = await getMarketRows(PRELOAD.symbol, PRELOAD.interval, PRELOAD.range);
+		if (!rows.length || undoStack.length) return;	// user already started editing → leave them be
+		doc = marketDoc(rows, PRELOAD.interval);
+		undoStack = []; redoStack = [];					// clean slate — no undo back to the seed
+		sel = null; hover = null; marquee = [];
+		buildInspector();
+		renderAxisPanel();
+		fitView();
+		save();											// becomes their canvas; a failed fetch stays unsaved and retries next visit
+		flashHint(`Loaded ${PRELOAD.symbol} — ${rows.length} bars ${marketSpan(rows, PRELOAD.interval)} · draw on real price action, or Library → Load market data for another`);
+	} catch (e) {
+		if (hintEl.textContent === 'Loading live market data…') hintEl.textContent = HINTS[tool];
 	}
 }
 
@@ -2614,15 +2648,19 @@ function measure() {
 new ResizeObserver(() => { measure(); requestRender(); }).observe(stage);
 
 measure();
+let firstVisit = false;
 if (loadFromHash()) {
 	/* shared link wins; clear it from storage-independent state and fit */
 	idSeq = Math.max(idSeq, 1000);
 	fitView();
 	save();
 } else if (!load()) {
+	/* genuine first visit — show the seed instantly, then swap in live data
+	   (?noload keeps the static seed, e.g. for automated tests) */
 	doc = normalizeDoc(seedDoc());
 	fitView();
-	save();
+	firstVisit = !/[?&]noload\b/.test(location.search);
+	if (!firstVisit) save();
 }
 measure();
 setTool('select');
@@ -2630,6 +2668,7 @@ buildInspector();
 renderAxisPanel();
 requestRender();
 showFirstTip();
+if (firstVisit) preloadMarket();
 
 /* debug/test handle */
 window.__lab = {
