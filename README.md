@@ -17,7 +17,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Action | How |
 |---|---|
 | Add candle | `C` then click, double-click empty space, or use the Shapes menu |
-| Shapes & Patterns menus | Top-bar dropdowns: classic candles (marubozu, dojis, hammer, star…) and multi-bar patterns (engulfing, morning/evening doji star, harami, soldiers/crows) — click an item to append after the last bar, or drag it onto the chart to drop at an exact bar and price. Appending pins the first open to the prior close; patterns land as one undo step |
+| Shapes & Patterns menus | Top-bar dropdowns: 14 single candles (marubozu, dojis incl. dragonfly/gravestone/long-legged, hammer, inverted hammer, hanging man, shooting star, spinning top, high-wave) and 16 multi-bar patterns (engulfing, morning/evening star, harami, three soldiers/crows, piercing line, dark cloud cover, tweezer top/bottom, bull/bear kicker, rising/falling three methods) — click to append after the last bar, or drag onto the chart to drop at an exact bar and price. Appending pins the first open to the prior close; patterns land as one undo step |
 | Reshape candle | Pull the round wick dots (high/low) or the body-edge pills (open/close) — drags are relative, so values never jump to the cursor |
 | Move candle | Drag anywhere else on the candle — vertical moves price, horizontal moves bars (occupied slots swap) |
 | Box-select | Drag a rectangle on empty space to select every object it touches, then drag any one to move them all, or `⌫` to delete them (locked objects are skipped). Alt/right-drag still pans |

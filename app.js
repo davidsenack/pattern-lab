@@ -1201,7 +1201,11 @@ const SHAPES = [
 	{ key: 'gravestone', name: 'Gravestone doji', cs: [{ o: -0.42, c: -0.42, h: 0.55, l: -0.48 }] },
 	{ key: 'hammer', name: 'Hammer', cs: [{ o: 0.22, c: 0.45, h: 0.50, l: -0.55 }] },
 	{ key: 'star', name: 'Shooting star', cs: [{ o: -0.22, c: -0.45, h: 0.55, l: -0.50 }] },
+	{ key: 'inv-hammer', name: 'Inverted hammer', cs: [{ o: -0.45, c: -0.22, h: 0.55, l: -0.50 }] },
+	{ key: 'hanging', name: 'Hanging man', cs: [{ o: 0.45, c: 0.22, h: 0.50, l: -0.55 }] },
 	{ key: 'spin', name: 'Spinning top', cs: [{ o: -0.14, c: 0.14, h: 0.50, l: -0.50 }] },
+	{ key: 'longleg', name: 'Long-legged doji', cs: [{ o: 0, c: 0, h: 0.78, l: -0.78 }] },
+	{ key: 'highwave', name: 'High-wave candle', cs: [{ o: -0.12, c: 0.12, h: 0.72, l: -0.72 }] },
 ];
 
 const PATTERNS = [
@@ -1240,6 +1244,44 @@ const PATTERNS = [
 		{ o: 0.60, c: 0.10, h: 0.70, l: 0.00 },
 		{ o: 0.25, c: -0.25, h: 0.35, l: -0.35 },
 		{ o: -0.10, c: -0.60, h: 0.00, l: -0.70 },
+	] },
+	{ key: 'piercing', name: 'Piercing line', cs: [
+		{ o: 0.40, c: -0.40, h: 0.50, l: -0.50 },
+		{ o: -0.55, c: 0.12, h: 0.22, l: -0.62 },
+	] },
+	{ key: 'dark-cloud', name: 'Dark cloud cover', cs: [
+		{ o: -0.40, c: 0.40, h: 0.50, l: -0.50 },
+		{ o: 0.55, c: -0.12, h: 0.62, l: -0.22 },
+	] },
+	{ key: 'tweezer-bottom', name: 'Tweezer bottom', cs: [
+		{ o: 0.30, c: -0.30, h: 0.40, l: -0.55 },
+		{ o: -0.30, c: 0.30, h: 0.40, l: -0.55 },
+	] },
+	{ key: 'tweezer-top', name: 'Tweezer top', cs: [
+		{ o: -0.30, c: 0.30, h: 0.55, l: -0.40 },
+		{ o: 0.30, c: -0.30, h: 0.55, l: -0.40 },
+	] },
+	{ key: 'kicker-bull', name: 'Bullish kicker', cs: [
+		{ o: 0.05, c: -0.45, h: 0.05, l: -0.45 },
+		{ o: 0.20, c: 0.72, h: 0.72, l: 0.20 },
+	] },
+	{ key: 'kicker-bear', name: 'Bearish kicker', cs: [
+		{ o: -0.05, c: 0.45, h: 0.45, l: -0.05 },
+		{ o: -0.20, c: -0.72, h: -0.20, l: -0.72 },
+	] },
+	{ key: 'rising-three', name: 'Rising three methods', cs: [
+		{ o: -0.60, c: 0.30, h: 0.40, l: -0.70 },
+		{ o: 0.20, c: 0.02, h: 0.26, l: -0.05 },
+		{ o: 0.06, c: -0.14, h: 0.12, l: -0.20 },
+		{ o: -0.06, c: -0.26, h: 0.00, l: -0.32 },
+		{ o: -0.20, c: 0.58, h: 0.68, l: -0.26 },
+	] },
+	{ key: 'falling-three', name: 'Falling three methods', cs: [
+		{ o: 0.60, c: -0.30, h: 0.70, l: -0.40 },
+		{ o: -0.20, c: -0.02, h: 0.05, l: -0.26 },
+		{ o: -0.06, c: 0.14, h: 0.20, l: -0.12 },
+		{ o: 0.06, c: 0.26, h: 0.32, l: 0.00 },
+		{ o: 0.20, c: -0.58, h: 0.26, l: -0.68 },
 	] },
 ];
 
@@ -1315,11 +1357,16 @@ function appendShape(sh) {
 const SHORT = {
 	'bull': 'Bull', 'bear': 'Bear', 'maru-bull': 'Marubozu', 'maru-bear': 'Marubozu',
 	'doji': 'Doji', 'dragonfly': 'Dragonfly', 'gravestone': 'Gravestone',
-	'hammer': 'Hammer', 'star': 'Shooting star', 'spin': 'Spinning top',
+	'hammer': 'Hammer', 'star': 'Shooting star', 'inv-hammer': 'Inv. hammer', 'hanging': 'Hanging man',
+	'spin': 'Spinning top', 'longleg': 'Long doji', 'highwave': 'High wave',
 	'engulf-bull': 'Bull engulfing', 'engulf-bear': 'Bear engulfing',
 	'morning-star': 'Morning star', 'evening-star': 'Evening star',
 	'harami-bull': 'Bull harami', 'harami-bear': 'Bear harami',
 	'soldiers': 'Soldiers', 'crows': 'Crows',
+	'piercing': 'Piercing', 'dark-cloud': 'Dark cloud',
+	'tweezer-bottom': 'Tweezer bot.', 'tweezer-top': 'Tweezer top',
+	'kicker-bull': 'Bull kicker', 'kicker-bear': 'Bear kicker',
+	'rising-three': 'Rising 3', 'falling-three': 'Falling 3',
 };
 
 let openMenu = null;		// { panel, btn }
