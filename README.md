@@ -22,7 +22,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Move candle | Drag anywhere else on the candle — vertical moves price, horizontal moves bars (occupied slots swap) |
 | Flip bull/bear | Double-click the candle, or "Flip direction" in the inspector |
 | Exact values | Select a candle and type into the O/H/L/C inspector fields |
-| Style anything | Select an object — the inspector gives per-candle colour; colour, weight and solid/dashed for levels, trendlines and arrows; colour and size for labels. "↺" resets a colour to the theme default |
+| Properties bar | Selecting an object fills the bar docked under the toolbar (it never floats over the chart): per-candle colour; colour, weight and solid/dashed for levels, trendlines and arrows; colour and size for labels; plus Flip / Lock / Delete. "↺" resets a colour to the theme default |
 | Axis | Axis menu — switch the bottom axis from bar numbers to clock time (1m…1W timeframe + start time), and set price-axis decimals (auto or fixed). Saved and shared with the pattern |
 | Price level | `L` then click at a price; drag to move |
 | Trendline / Arrow | `T` / `A`, then click the start point and click the end point (a live preview follows the cursor between clicks); endpoints stay draggable. Right-click or `Esc` returns to the pointer tool |
@@ -31,7 +31,7 @@ Then open http://localhost:8642. No build step, no dependencies, no backend — 
 | Fit / undo / delete | `F` · `⌘Z` / `⇧⌘Z` · `⌫` on selection |
 | Right-click menu | In the pointer tool, right-click an object to Lock / Duplicate / Delete it, or right-click empty space to add a candle. (In a drawing tool, right-click returns to the pointer.) Both menus also offer Clear drawings / Clear all |
 | Lock | Locked objects can't be moved, reshaped or deleted (they show a small padlock); unlock from the inspector or the right-click menu. Persists with the pattern |
-| Clear | Trash-icon dropdown (or the right-click menu): **Clear drawings** removes levels/lines/arrows/labels but keeps candles; **Clear all** wipes the canvas. Both are a single undo step |
+| Clear | Trash-icon dropdown (or the right-click menu): **Clear drawings** removes levels/lines/arrows/labels but keeps candles; **Clear all** wipes the canvas after a confirmation dialog. Both are a single undo step |
 | Themes | Theme menu — Graphite, Midnight, Paper (light), Fjord. Remembered across visits |
 | Save / load patterns | Library menu — name the canvas and Save; click a saved row to load it (undo restores the previous canvas); ✕ deletes. Stored in localStorage |
 | Export data | Library → CSV (`bar,open,high,low,close`) or JSON (candles + levels + trendlines + arrows + labels) |

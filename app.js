@@ -850,6 +850,11 @@ function cursorFor(hit) {
 /* ————— keyboard ————— */
 
 window.addEventListener('keydown', e => {
+	if (!confirmEl.hidden) {
+		if (e.key === 'Escape') closeConfirm();
+		else if (e.key === 'Enter') acceptConfirm();
+		return;
+	}
 	const tag = (e.target.tagName || '').toLowerCase();
 	if (tag === 'input' || tag === 'textarea') {
 		if (e.key === 'Escape') {
@@ -925,6 +930,7 @@ function setTool(t) {
 	toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === t));
 	hintEl.textContent = HINTS[t];
 	hover = null;
+	buildInspector();	// show/hide the props bar for the current tool
 	requestRender();
 }
 
@@ -943,7 +949,7 @@ clearPanel.innerHTML =
 	`<button class="clear-item" id="clrDraw">${trashSmall}Clear drawings</button>` +
 	`<button class="clear-item danger" id="clrAll">${trashSmall}Clear all</button>`;
 clearPanel.querySelector('#clrDraw').addEventListener('click', () => { clearDrawings(); closeMenus(); });
-clearPanel.querySelector('#clrAll').addEventListener('click', () => { clearAll(); closeMenus(); });
+clearPanel.querySelector('#clrAll').addEventListener('click', () => { closeMenus(); clearAllConfirm(); });
 
 /* ————— right-click context menu ————— */
 
@@ -983,7 +989,7 @@ function showContextMenu(clientX, clientY, hit, svgPos) {
 		items.push({ sep: true });
 	}
 	items.push({ label: 'Clear drawings', icon: ICON.trash, act: clearDrawings });
-	items.push({ label: 'Clear all', icon: ICON.trash, danger: true, act: clearAll });
+	items.push({ label: 'Clear all', icon: ICON.trash, danger: true, act: clearAllConfirm });
 
 	ctxEl.innerHTML = items.map((it, i) => it.sep
 		? '<div class="ctx-sep"></div>'
@@ -1517,6 +1523,34 @@ fileInput.addEventListener('change', () => {
 	reader.readAsText(f);
 });
 
+/* ————— confirm dialog ————— */
+
+const confirmEl = document.getElementById('confirm');
+let confirmCb = null;
+
+function askConfirm(title, msg, okLabel, onOk) {
+	document.getElementById('confirmTitle').textContent = title;
+	document.getElementById('confirmMsg').textContent = msg;
+	document.getElementById('confirmOk').textContent = okLabel;
+	confirmCb = onOk;
+	confirmEl.hidden = false;
+	requestAnimationFrame(() => document.getElementById('confirmOk').focus());
+}
+
+function closeConfirm() { confirmEl.hidden = true; confirmCb = null; }
+function acceptConfirm() { const cb = confirmCb; closeConfirm(); if (cb) cb(); }
+
+document.getElementById('confirmOk').addEventListener('click', acceptConfirm);
+document.getElementById('confirmCancel').addEventListener('click', closeConfirm);
+document.getElementById('confirmClose').addEventListener('click', closeConfirm);
+confirmEl.addEventListener('pointerdown', e => { if (e.target === confirmEl) closeConfirm(); });
+
+function clearAllConfirm() {
+	const n = doc.candles.length + doc.levels.length + doc.lines.length + doc.arrows.length + doc.texts.length;
+	if (!n) { flashHint('Canvas is already empty'); return; }
+	askConfirm('Clear everything?', `This removes all ${n} object${n > 1 ? 's' : ''} on the canvas. You can undo it afterward.`, 'Clear all', clearAll);
+}
+
 /* ————— inline text editor ————— */
 
 function startTextEdit(id, isNew, preSnap) {
@@ -1599,133 +1633,98 @@ function isDashed(type, el) {
 	return type === 'level' ? el.dash !== false : !!el.dash;
 }
 
-function colorRow(type, el) {
+/* horizontal props-bar control groups */
+function pColor(type, el) {
 	const has = !!el.color;
-	return `<div class="insp-row"><span class="insp-lbl">Color</span>` +
-		`<span class="color-wrap"><input type="color" class="color-in" data-style="color" value="${effColor(type, el)}" aria-label="Color">` +
-		`<button class="reset-btn${has ? '' : ' hidden'}" data-reset="color" title="Reset to theme colour">↺</button></span></div>`;
+	return `<span class="p-group"><span class="p-lbl">Colour</span>` +
+		`<span class="color-wrap"><input type="color" class="color-in" data-style="color" value="${effColor(type, el)}" aria-label="Colour">` +
+		`<button class="reset-btn${has ? '' : ' hidden'}" data-reset="color" title="Reset to theme colour">↺</button></span></span>`;
 }
 
-function weightRow(type, el) {
+function pWeight(type, el) {
 	const wp = W_PRESETS[type];
 	const cur = el.width != null ? el.width : wp[0];
 	const btns = wp.map(v =>
 		`<button class="seg-btn${Math.abs(v - cur) < 0.01 ? ' active' : ''}" data-style="width" data-val="${v}" title="${v}px" aria-label="Weight ${v}px">` +
 		`<span class="wbar" style="height:${v}px"></span></button>`).join('');
-	return `<div class="insp-row"><span class="insp-lbl">Weight</span><div class="seg">${btns}</div></div>`;
+	return `<span class="p-group"><span class="p-lbl">Weight</span><div class="seg">${btns}</div></span>`;
 }
 
-function dashRow(type, el) {
+function pDash(type, el) {
 	const on = isDashed(type, el);
-	return `<div class="insp-row"><span class="insp-lbl">Style</span><div class="seg">` +
+	return `<span class="p-group"><span class="p-lbl">Line</span><div class="seg">` +
 		`<button class="seg-btn${on ? '' : ' active'}" data-style="dash" data-val="0" aria-label="Solid line"><span class="dashbar solid"></span></button>` +
 		`<button class="seg-btn${on ? ' active' : ''}" data-style="dash" data-val="1" aria-label="Dashed line"><span class="dashbar dashed"></span></button>` +
-		`</div></div>`;
+		`</div></span>`;
 }
 
-function sizeRow(el) {
+function pSize(el) {
 	const cur = el.size || DEF_TEXT_SIZE;
 	const btns = SIZE_PRESETS.map((v, i) =>
 		`<button class="seg-btn${Math.abs(v - cur) < 0.01 ? ' active' : ''}" data-style="size" data-val="${v}" aria-label="Size ${v}">` +
 		`<span style="font-size:${9 + i * 2.5}px;line-height:1">A</span></button>`).join('');
-	return `<div class="insp-row"><span class="insp-lbl">Size</span><div class="seg">${btns}</div></div>`;
+	return `<span class="p-group"><span class="p-lbl">Size</span><div class="seg">${btns}</div></span>`;
 }
 
-function styleSection(type, el) {
-	let rows = colorRow(type, el);
-	if (type === 'text') rows += sizeRow(el);
-	else if (type === 'level' || type === 'line' || type === 'arrow') rows += weightRow(type, el) + dashRow(type, el);
-	return `<div class="insp-style">${rows}</div>`;
+function pStyle(type, el) {
+	if (type === 'text') return pColor(type, el) + pSize(el);
+	if (type === 'candle') return pColor(type, el);
+	return pColor(type, el) + pWeight(type, el) + pDash(type, el);	// level, line, arrow
 }
 
 /* ————— inspector ————— */
 
 function buildInspector() {
 	const el = findSel();
-	if (!el) {
-		inspectorEl.hidden = true;
-		inspectorEl.innerHTML = '';
+	inspectorEl.hidden = false;		// the bar is always docked so the chart never reflows
+	/* it's an editing surface — populated only in the pointer tool with a
+	   selection; otherwise a muted placeholder keeps the layout stable */
+	if (!el || tool !== 'select') {
+		const msg = tool !== 'select'
+			? 'Switch to the pointer tool to edit objects'
+			: 'Select an object to edit its properties · right-click for actions';
+		inspectorEl.innerHTML = `<span class="p-empty">${msg}</span>`;
 		updateReadout();
 		return;
 	}
 	const trashSvg = '<svg viewBox="0 0 16 16"><path d="M2.8 4.5h10.4M6.3 4.5V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.5M4.2 4.5l.6 8.3a1 1 0 0 0 1 .95h4.4a1 1 0 0 0 1-.95l.6-8.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-	/* locked object: read-only card with just an unlock action */
+	const dot = `<span class="p-dot" style="background:${effColor(sel.type, el)}"></span>`;
+	const numField = (k, label) => `<div class="field"><label>${label}</label><input type="number" step="0.25" data-k="${k}" value="${fmt(el[k])}"></div>`;
+	const lockIcon = '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.4 0V7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+	const lockBtn = `<button class="p-btn" data-act="lock" title="Lock" aria-label="Lock">${lockIcon}</button>`;
+	const delBtn = `<button class="p-btn danger" data-act="del" title="Delete — ⌫" aria-label="Delete">${trashSvg}</button>`;
+	const div = '<span class="p-div"></span>';
+
+	/* locked object: read-only strip with just an Unlock action */
 	if (el.locked) {
-		const name = { candle: 'Candle', level: 'Price level', line: 'Trendline', arrow: 'Arrow', text: 'Label' }[sel.type];
-		inspectorEl.innerHTML = `
-			<div class="insp-head">
-				<span class="insp-dot" style="background:${effColor(sel.type, el)}"></span>
-				<span class="insp-title">${name} · locked</span>
-			</div>
-			<div class="insp-locked">
-				<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.3 7V5.2a2.7 2.7 0 0 1 5.4 0V7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
-				<span>Locked — can't be moved or deleted.</span>
-			</div>
-			<div class="insp-actions"><button data-act="unlock">Unlock</button></div>`;
+		const name = { candle: `Candle · bar ${el.slot}`, level: 'Price level', line: 'Trendline', arrow: 'Arrow', text: 'Label' }[sel.type];
+		inspectorEl.innerHTML = `${dot}<span class="p-title">${name}</span>${div}` +
+			`<span class="p-locked">${lockIcon}<span>Locked — can't be moved or deleted</span></span>` +
+			`<span class="p-spacer"></span><button class="p-btn wide" data-act="unlock">Unlock</button>`;
 		inspectorEl.hidden = false;
 		inspectorEl.querySelector('[data-act="unlock"]').addEventListener('click', () => toggleLock());
 		updateReadout();
 		return;
 	}
 
-	let html = '';
+	let mid = '', actions = '';
 	if (sel.type === 'candle') {
-		const up = el.c >= el.o;
-		html = `
-			<div class="insp-head">
-				<span class="insp-dot" style="background:${effColor('candle', el)}"></span>
-				<span class="insp-title">Candle · bar ${el.slot}</span>
-				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
-			</div>
-			<div class="insp-grid">
-				${['o', 'h', 'l', 'c'].map(k => `
-					<div class="field"><label>${k.toUpperCase()}</label>
-					<input type="number" step="0.25" data-k="${k}" value="${fmt(el[k])}"></div>`).join('')}
-			</div>
-			${styleSection('candle', el)}
-			<div class="insp-actions">
-				<button data-act="flip">Flip direction</button>
-			</div>`;
+		mid = `<div class="p-fields">${['o', 'h', 'l', 'c'].map(k => numField(k, k.toUpperCase())).join('')}</div>${div}${pStyle('candle', el)}`;
+		actions = `<button class="p-btn wide" data-act="flip">Flip</button>${lockBtn}${delBtn}`;
 	} else if (sel.type === 'level') {
-		html = `
-			<div class="insp-head">
-				<span class="insp-dot" style="background:${COL.level}"></span>
-				<span class="insp-title">Price level</span>
-				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
-			</div>
-			<div class="insp-grid single">
-				<div class="field"><label>@</label>
-				<input type="number" step="0.25" data-k="price" value="${fmt(el.price)}"></div>
-			</div>
-			${styleSection('level', el)}`;
+		mid = `<div class="p-fields">${numField('price', '@')}</div>${div}${pStyle('level', el)}`;
+		actions = `${lockBtn}${delBtn}`;
 	} else if (sel.type === 'text') {
-		html = `
-			<div class="insp-head">
-				<span class="insp-dot" style="background:${effColor('text', el)}"></span>
-				<span class="insp-title">Label</span>
-				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
-			</div>
-			${styleSection('text', el)}
-			<div class="insp-actions">
-				<button data-act="edit">Edit text…</button>
-			</div>`;
+		mid = pStyle('text', el);
+		actions = `<button class="p-btn wide" data-act="edit">Edit text</button>${lockBtn}${delBtn}`;
 	} else {
-		html = `
-			<div class="insp-head">
-				<span class="insp-dot" style="background:${COL.tline}"></span>
-				<span class="insp-title">${sel.type === 'arrow' ? 'Arrow' : 'Trendline'}</span>
-				<button class="tbtn danger" data-act="del" title="Delete — ⌫">${trashSvg}</button>
-			</div>
-			<div class="insp-grid">
-				<div class="field"><label>${sel.type === 'arrow' ? 'From' : 'P1'}</label>
-				<input type="number" step="0.25" data-k="p1" value="${fmt(el.p1)}"></div>
-				<div class="field"><label>${sel.type === 'arrow' ? 'To' : 'P2'}</label>
-				<input type="number" step="0.25" data-k="p2" value="${fmt(el.p2)}"></div>
-			</div>
-			${styleSection(sel.type, el)}`;
+		const from = sel.type === 'arrow' ? 'From' : 'P1', to = sel.type === 'arrow' ? 'To' : 'P2';
+		mid = `<div class="p-fields">${numField('p1', from)}${numField('p2', to)}</div>${div}${pStyle(sel.type, el)}`;
+		actions = `${lockBtn}${delBtn}`;
 	}
-	inspectorEl.innerHTML = html;
+	const title = { candle: `Candle · bar ${el.slot}`, level: 'Price level', line: 'Trendline', arrow: 'Arrow', text: 'Label' }[sel.type];
+	inspectorEl.innerHTML = `${dot}<span class="p-title">${title}</span>${div}${mid}<span class="p-spacer"></span>${actions}`;
 	inspectorEl.hidden = false;
 
 	inspectorEl.querySelectorAll('input[data-k]').forEach(inp => {
@@ -1760,7 +1759,7 @@ function buildInspector() {
 			if (!el2) return;
 			if (!colorIn.dataset.pre) colorIn.dataset.pre = snap();
 			el2.color = colorIn.value;
-			const dot = inspectorEl.querySelector('.insp-dot');
+			const dot = inspectorEl.querySelector('.p-dot');
 			if (dot) dot.style.background = colorIn.value;
 			const reset = inspectorEl.querySelector('[data-reset="color"]');
 			if (reset) reset.classList.remove('hidden');
@@ -1806,6 +1805,7 @@ function buildInspector() {
 			if (btn.dataset.act === 'del') { deleteSelection(); requestRender(); }
 			else if (btn.dataset.act === 'flip') { flipCandle(el2); requestRender(); }
 			else if (btn.dataset.act === 'edit') { startTextEdit(sel.id); }
+			else if (btn.dataset.act === 'lock') { toggleLock(); }
 		});
 	});
 	updateReadout();
@@ -1817,9 +1817,9 @@ function syncInspectorValues() {
 	inspectorEl.querySelectorAll('input[data-k]').forEach(inp => {
 		if (document.activeElement !== inp) inp.value = fmt(el[inp.dataset.k]);
 	});
-	const dot = inspectorEl.querySelector('.insp-dot');
+	const dot = inspectorEl.querySelector('.p-dot');
 	if (dot && sel.type === 'candle') dot.style.background = effColor('candle', el);
-	const title = inspectorEl.querySelector('.insp-title');
+	const title = inspectorEl.querySelector('.p-title');
 	if (title && sel.type === 'candle') title.textContent = `Candle · bar ${el.slot}`;
 }
 
